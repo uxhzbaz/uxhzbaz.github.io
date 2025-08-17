@@ -1,9 +1,6 @@
 #!/bin/bash
-# 1. Android SDK 安装路径
 #    脚本会自动将 SDK 下载并安装到这里。
 ANDROID_SDK_ROOT="$HOME/Android/Sdk"
-
-# 2. 最终 APK 输出目录
 #    编译成功后，最终的 APK 文件会放在这里。
 OUTPUT_DIR="$HOME/microg_build_output"
 
