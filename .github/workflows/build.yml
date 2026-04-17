@@ -1,84 +1,115 @@
-name: Build Unofficial Node.js (linux-arm64-musl)
+name: Build Static Node.js (aarch64-linux-musl)
 
-on: 
+on:
   workflow_dispatch:
     inputs:
       node_version:
-        description: 'Node.js version (e.g., v25.9.0)'     
+        description: 'Node.js version (务必带v, 例如: v24.15.0)'
         required: true
-        default: 'v25.9.0'
+        default: 'v24.15.0'
 
 env:
-  NODE_VERSION: ${{ github.event.inputs.node_version || 'v25.9.0' }}
-  # 彻底解决 Node.js 20 弃用警告，强制 Actions 使用 Node 24
+  NODE_VERSION: ${{ github.event.inputs.node_version || 'v24.15.0' }}
+  # 强制 actions 使用 Node24，完美应对 2026 年的弃用限制 (出现的黄色警告无视即可)
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build_linux_arm64_musl:
-    name: Build linux-arm64-musl
-    runs-on: ubuntu-latest
-    
+  build_static_node:
+    name: Build aarch64 musl static
+    runs-on: ubuntu-24.04
+
     steps:
-      - name: Free Disk Space
-        # 编译 Node.js 与构建跨平台 Docker 镜像非常耗费磁盘空间，此插件可腾出约 30GB 空间防止磁盘被打满
+      # 1. 扩容与防崩溃机制（解决 Exit Code 4 的核心所在）
+      - name: Free Disk Space & Enable Swap
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: false
-          swap-storage: true
+          swap-storage: true # 关键：为你增加高达 4GB 的虚拟内存，彻底杜绝编译 V8 引擎时内存溢出
 
-      - name: Checkout unofficial-builds
+      - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          repository: nodejs/unofficial-builds
-          path: unofficial-builds
 
-      - name: Setup Node.js Environment
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          # unofficial-builds 脚本在编译完成后，需要调用 npm 上的 nodejs-dist-indexer 来生成 index.json 索引文件
-
-      - name: Prepare Required Docker Images
+      # 2. 精准下载源码（如果填错版本号，这里会直接明确报错，不再是莫名其妙的 Exit 1）
+      - name: Download Node.js Source
         run: |
-          cd unofficial-builds
-          
-          # unofficial-builds 依靠特制的 Docker 镜像来完成沙盒内的全自动跨平台编译
-          # 我们只需要构建两个核心镜像: 源码拉取器(fetch-source) 和 目标编译环境(linux-arm64-musl)
-          
-          echo "Building fetch-source image..."
-          if [ -f "bin/prepare-images.sh" ]; then
-            chmod +x bin/prepare-images.sh
-            ./bin/prepare-images.sh fetch-source
-            ./bin/prepare-images.sh linux-arm64-musl
-          elif make -n image-fetch-source >/dev/null 2>&1; then
-            make image-fetch-source
-            make image-linux-arm64-musl
-          else
-            # 兼容模式：直接构建
-            docker build -t fetch-source -t unofficial-builds/fetch-source recipes/fetch-source
-            docker build -t linux-arm64-musl -t unofficial-builds/linux-arm64-musl recipes/linux-arm64-musl
+          echo "Fetching Node.js $NODE_VERSION..."
+          URL="https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}.tar.gz"
+          if ! curl -f -sSLO "$URL"; then
+            echo "❌ 错误: 找不到指定版本，请检查版本号 $NODE_VERSION 是否已在 Node.js 官网发布。"
+            exit 1
           fi
+          tar -xzf node-${NODE_VERSION}.tar.gz
 
-      - name: Execute Unofficial Build Script
+      # 3. 注入纯净的 musl 交叉编译工具链
+      - name: Setup musl.cc Toolchain
         run: |
-          # 必须将 workdir 设置为当前工作区，防止脚本在深层目录迷失导致无法创建 staging、download 和 .ccache 文件夹
-          export workdir="$GITHUB_WORKSPACE"
-          cd unofficial-builds
-          
-          chmod +x ./bin/build.sh
-          
-          # 正式执行交叉编译 (调用 Docker 内部工具链)
-          echo "Starting build for Node ${{ env.NODE_VERSION }} targeting linux-arm64-musl..."
-          ./bin/build.sh -v ${{ env.NODE_VERSION }} -r linux-arm64-musl
+          echo "Downloading aarch64-linux-musl cross-compiler..."
+          curl -sSLO https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar -xzf aarch64-linux-musl-cross.tgz
+          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
 
-      - name: Upload Build Artifacts
+      # 4. 安装宿主机构建依赖
+      - name: Install Host Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 build-essential make ninja-build curl file
+
+      # 5. 核心编译环节
+      - name: Cross-compile Node.js
+        run: |
+          cd node-${NODE_VERSION}
+          
+          # ===== 目标设备 (Target) 工具链 =====
+          export CC="aarch64-linux-musl-gcc"
+          export CXX="aarch64-linux-musl-g++"
+          export AR="aarch64-linux-musl-ar"
+          export NM="aarch64-linux-musl-nm"
+          export LD="aarch64-linux-musl-ld"
+          export RANLIB="aarch64-linux-musl-ranlib"
+          export STRIP="aarch64-linux-musl-strip"
+          
+          # ===== 宿主机 (Host) 工具链 =====
+          # 供 mksnapshot 等 Node 内部生成工具在打包机本地执行
+          export CC_host="gcc"
+          export CXX_host="g++"
+          export AR_host="ar"
+          export NM_host="nm"
+          export LD_host="ld"
+          
+          # ===== 编译标志 =====
+          export CFLAGS="-static -O2 -ffunction-sections -fdata-sections"
+          export CXXFLAGS="-static -O2 -ffunction-sections -fdata-sections"
+          export LDFLAGS="-static -Wl,--gc-sections -Wl,--strip-all"
+          
+          echo "开始配置 Node.js 编译环境..."
+          ./configure \
+            --dest-cpu=arm64 \
+            --dest-os=linux \
+            --fully-static \
+            --without-snapshot \
+            --with-intl=none \
+            --cross-compiling
+          
+          # 关键点：强制限制为 -j2 (2个并发)，用时间换取空间，100% 避免因为并发过高导致的 Exit 4
+          echo "开始执行编译 (限流防崩溃模式)..."
+          make -j2 V=1
+          
+          echo "执行体积裁剪..."
+          $STRIP out/Release/node
+          
+          mkdir -p ../artifacts
+          cp out/Release/node ../artifacts/node-${NODE_VERSION}-linux-arm64-musl-static
+          
+      # 6. 自动验证文件类型
+      - name: Verify Binary
+        run: |
+          cd artifacts
+          echo "构建产物详情:"
+          file node-${NODE_VERSION}-linux-arm64-musl-static
+          
+      # 7. 上传最终产物供下载
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: node-${{ env.NODE_VERSION }}-linux-arm64-musl
-          # unofficial-builds 的脚本会把打包好的 .tar.gz 文件、哈希校验单 (SHASUMS256.txt) 和索引导出到该目录
-          path: download/
+          path: artifacts/
