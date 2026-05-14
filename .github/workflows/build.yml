@@ -7,7 +7,7 @@ on:
       t:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
-        description: 'cargo build --locked [true/false]'
+        description: 'cargo build --locked[ture/false]'
         default: 'true'
         required: false
       bn:
@@ -83,8 +83,21 @@ jobs:
       - name: Set exe extension
         if: runner.os == 'Windows'
         run: echo "EXE=.exe" >> $GITHUB_ENV
-      - shell: bash
-        if: ${{ github.event.inputs.upx }}
+      - name: Find and rename binary
+        shell: bash
+        run: |
+          RELEASE_DIR="target/${{ matrix.t.t }}/release"
+          DEST="$RELEASE_DIR/${{ matrix.s.b }}${{ env.EXE }}"
+          if [ ! -f "$DEST" ]; then
+            FOUND=$(find "$RELEASE_DIR" -maxdepth 1 -type f -name "${{ matrix.s.b }}*${{ env.EXE }}" ! -name "*.d" ! -name "*.rlib" | head -1)
+            if [ -z "$FOUND" ]; then
+              FOUND=$(find "$RELEASE_DIR" -maxdepth 1 -type f -executable ! -name "*.d" ! -name "*.rlib" ! -name "build" | head -1)
+            fi
+            [ -n "$FOUND" ] && mv "$FOUND" "$DEST"
+          fi
+      - name: UPX compress
+        if: ${{ github.event.inputs.upx != 'false' }}
+        shell: bash
         run: |
           upx --best --lzma "target/${{ matrix.t.t }}/release/${{ matrix.s.b }}${{ env.EXE }}"
       - shell: bash
@@ -92,7 +105,7 @@ jobs:
           A="${{ matrix.s.b }}-${{ matrix.t.t }}"
           tar -cf - -C "target/${{ matrix.t.t }}/release" "${{ matrix.s.b }}${{ env.EXE }}" | \
           xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "$A.txz"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.s.b }}-${{ matrix.t.t }}
           path: ${{ matrix.s.b }}-${{ matrix.t.t }}.txz
