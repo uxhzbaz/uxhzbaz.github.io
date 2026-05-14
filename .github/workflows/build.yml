@@ -4,10 +4,6 @@ on:
     inputs:
       u:
         default: 'https://github.com/svenstaro/miniserve/archive/refs/tags/v0.35.0.tar.gz,https://github.com/magic-wormhole/magic-wormhole.rs/archive/refs/tags/0.8.1.tar.gz'
-      name:
-        description: '自定义此次运行名称'
-        default: ''
-        required: false
       t:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
@@ -232,7 +228,6 @@ jobs:
             s5=$(sha512 "$TXZ")
             echo "| \`${TXZ}\` (压缩包) | \`$c\` | \`$s2\` | \`$s5\` |"
 
-          [[ -n "${{ github.event.inputs.name }}" ]] && echo "_${{ github.event.inputs.name }}_" >> "$GITHUB_STEP_SUMMARY"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
