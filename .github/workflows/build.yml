@@ -1,17 +1,27 @@
 name: B
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'P'
+        type: choice
+        options: [all, miniserve, wormhole-rs]
+        default: all
+      target:
+        description: 'T'
+        type: choice
+        options: [all, x86_64-unknown-linux-musl, x86_64-unknown-linux-gnu, aarch64-unknown-linux-musl, aarch64-unknown-linux-gnu, armv7-unknown-linux-musleabihf, armv7-unknown-linux-gnueabihf, arm-unknown-linux-musleabihf, riscv64gc-unknown-linux-gnu, x86_64-pc-windows-msvc, i686-pc-windows-msvc, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-unknown-freebsd, x86_64-unknown-illumos]
+        default: all
 jobs:
   b:
+    if: (inputs.source == 'all' || inputs.source == matrix.s.b) && (inputs.target == 'all' || inputs.target == matrix.t.t)
     runs-on: ${{ matrix.t.o }}
     strategy:
+      fail-fast: false
       matrix:
         s:
-          - u: https://github.com/svenstaro/miniserve/archive/refs/tags/v0.35.0.tar.gz
-            d: miniserve-0.35.0
-            b: miniserve
-          - u: https://github.com/magic-wormhole/magic-wormhole.rs/archive/refs/tags/0.8.1.tar.gz
-            d: magic-wormhole.rs-0.8.1
-            b: wormhole-rs
+          - {u: https://github.com/svenstaro/miniserve/archive/refs/tags/v0.35.0.tar.gz, d: miniserve-0.35.0, b: miniserve}
+          - {u: https://github.com/magic-wormhole/magic-wormhole.rs/archive/refs/tags/0.8.1.tar.gz, d: magic-wormhole.rs-0.8.1, b: wormhole-rs}
         t:
           - {o: ubuntu-latest, t: x86_64-unknown-linux-musl, c: ""}
           - {o: ubuntu-latest, t: x86_64-unknown-linux-gnu, c: ""}
