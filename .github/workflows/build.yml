@@ -7,9 +7,17 @@ on:
       t:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
-        description: 'cargo build --locked[ture/false]'
+        description: 'cargo build --locked [true/false]'
         default: 'true'
         required: false
+      bn:
+        description: 'Binary names (comma-separated, empty=auto detect)'
+        default: ''
+        required: false
+      upx:
+        description: 'Enable UPX compression'
+        type: boolean
+        default: true
 
 jobs:
   s:
@@ -23,13 +31,15 @@ jobs:
         env:
           U: ${{ github.event.inputs.u }}
           T: ${{ github.event.inputs.t }}
+          BN: ${{ github.event.inputs.bn }}
         run: |
-          sources='['; IFS=','; for u in $U; do
+          sources='['; IFS=','; i=0; bn=(); for n in $BN; do bn+=("${n# }"); done
+          for u in $U; do
             u=${u# }; u=${u% }
             r=${u%%/archive/*}; r=${r##*/}
-            t=${u##*/archive/refs/tags/}
-            t=${t%.tar.gz}; t=${t%.tar.xz}; t=${t%.zip}; t=${t%.tgz}; t=${t%.*}
-            b="${r}-${t}"
+            if [ $i -lt ${#bn[@]} ]; then b="${bn[$i]}"
+            else b="$r"; [ "$r" = "magic-wormhole.rs" ] && b="wormhole-rs"; fi
+            ((i++))
             sources+="{\"u\":\"$u\",\"b\":\"$b\"},"
           done; sources="${sources%,}]"
           targets='['; for t in $T; do
@@ -74,10 +84,12 @@ jobs:
         if: runner.os == 'Windows'
         run: echo "EXE=.exe" >> $GITHUB_ENV
       - shell: bash
+        if: ${{ github.event.inputs.upx }}
         run: |
-          B="target/${{ matrix.t.t }}/release/${{ matrix.s.b }}${{ env.EXE }}"
+          upx --best --lzma "target/${{ matrix.t.t }}/release/${{ matrix.s.b }}${{ env.EXE }}"
+      - shell: bash
+        run: |
           A="${{ matrix.s.b }}-${{ matrix.t.t }}"
-          upx --best --lzma "$B"
           tar -cf - -C "target/${{ matrix.t.t }}/release" "${{ matrix.s.b }}${{ env.EXE }}" | \
           xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "$A.txz"
       - uses: actions/upload-artifact@v6
