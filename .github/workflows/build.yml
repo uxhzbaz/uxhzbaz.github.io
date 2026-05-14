@@ -75,7 +75,7 @@ jobs:
           upx --best --lzma "$B"
           tar -cf - -C "target/${{ matrix.t.t }}/release" "${{ matrix.s.b }}${{ env.EXE }}" | \
           xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "$A.txz"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.s.b }}-${{ matrix.t.t }}
           path: ${{ matrix.s.b }}-${{ matrix.t.t }}.txz
