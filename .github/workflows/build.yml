@@ -1,5 +1,4 @@
 name: B
-env:
 on:
   workflow_dispatch:
     inputs:
