@@ -1,18 +1,11 @@
-name: B
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-on:
-  workflow_dispatch:
-    inputs:
-      u:
-        default: 'https://github.com/svenstaro/miniserve/archive/refs/tags/v0.35.0.tar.gz,https://github.com/magic-wormhole/magic-wormhole.rs/archive/refs/tags/0.8.1.tar.gz'
-      t:
-        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
+
 jobs:
   s:
     runs-on: ubuntu-latest
     outputs:
-      u: ${{ steps.p.outputs.u }}
+      s: ${{ steps.p.outputs.s }}
       t: ${{ steps.p.outputs.t }}
     steps:
       - id: p
@@ -22,41 +15,60 @@ jobs:
           T: ${{ github.event.inputs.t }}
         run: |
           import os,json
+          sources = []
+          for u in os.environ['U'].split(','):
+            u=u.strip()
+            b="unknown"
+            if "miniserve" in u: b="miniserve"
+            elif "magic-wormhole.rs" in u: b="wormhole-rs"
+            sources.append({'u':u,'b':b})
+          targets = []
+          for t in os.environ['T'].split(','):
+            t=t.strip()
+            o='ubuntu-latest'
+            if 'windows' in t: o='windows-latest'
+            elif 'apple' in t: o='macos-latest'
+            c='--no-default-features' if 'riscv' in t else ''
+            targets.append({'t':t,'o':o,'c':c})
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-           f.write("u="+json.dumps([u.strip() for u in os.environ['U'].split(',')])+"\n")
-           f.write("t="+json.dumps([{'t':t.strip(),'o':'windows-latest' if 'windows' in t else 'macos-latest' if 'apple' in t else 'ubuntu-latest','c':'--no-default-features' if 'riscv' in t else ''} for t in os.environ['T'].split(',')])+"\n")
+            f.write(f"s={json.dumps(sources)}\n")
+            f.write(f"t={json.dumps(targets)}\n")
   b:
     needs: s
+    name: ${{ matrix.s.b }}-${{ matrix.t.t }}
     runs-on: ${{ matrix.t.o }}
     strategy:
       matrix:
-        u: ${{ fromJSON(needs.s.outputs.u) }}
+        s: ${{ fromJSON(needs.s.outputs.s) }}
         t: ${{ fromJSON(needs.s.outputs.t) }}
     steps:
       - uses: dtolnay/rust-toolchain@stable
-      - if: startsWith(matrix.t.o, 'ubuntu')
-        run: sudo apt install -y musl-tools
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl xz-utils
+      - if: runner.os == 'Windows'
+        run: choco install upx
+      - if: runner.os == 'macOS'
+        run: brew install upx xz
       - shell: bash
         run: |
-          curl -sL ${{ matrix.u }} -o s.tgz
-          tar -xzf s.tgz --strip-components=1
+          curl -sL ${{ matrix.s.u }} | tar -xz --strip-components=1
           grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || (grep -q '^\[profile\.release\]' Cargo.toml && perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
-          echo "N=$(echo '${{ matrix.u }}' | awk -F/ '{print $5}')" >> $GITHUB_ENV
       - uses: houseabsolute/actions-rust-cross@v0
         with:
           command: build
           args: --release --locked ${{ matrix.t.c }}
           target: ${{ matrix.t.t }}
-      - name: Set exe extension for Windows
-        run: echo "EXE=.exe" >> $env:GITHUB_ENV
-        if: startsWith(matrix.t.o, 'windows')
+      - name: Set exe extension
+        if: runner.os == 'Windows'
+        run: echo "EXE=.exe" >> $GITHUB_ENV
       - shell: bash
         run: |
-          mkdir out
-          for f in target/${{ matrix.t.t }}/release/*; do
-            if [[ -f "$f" && (! "$f" == *.* || "$f" == *.exe) ]]; then cp "$f" out/; fi
-          done
+          B="target/${{ matrix.t.t }}/release/${{ matrix.s.b }}${{ env.EXE }}"
+          A="${{ matrix.s.b }}-${{ matrix.t.t }}"
+          upx --best --lzma "$B"
+          export XZ_OPT="-9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000"
+          tar -cJf "$A.tar.xz" -C "target/${{ matrix.t.t }}/release" "${{ matrix.s.b }}${{ env.EXE }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.N }}-${{ matrix.t.t }}
-          path: out/*
+          name: ${{ matrix.s.b }}-${{ matrix.t.t }}
+          path: ${{ matrix.s.b }}-${{ matrix.t.t }}.tar.xz
