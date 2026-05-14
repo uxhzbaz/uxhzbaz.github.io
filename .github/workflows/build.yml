@@ -65,13 +65,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl xz-utils
+        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl xz-utils p7zip-full
 
       - if: runner.os == 'Windows'
-        run: choco install upx
+        run: choco install upx p7zip
 
       - if: runner.os == 'macOS'
-        run: brew install upx xz
+        run: brew install upx xz p7zip
 
       - name: Download and extract source
         shell: bash
@@ -79,8 +79,8 @@ jobs:
           curl -sL ${{ matrix.s.u }} | tar -xz --strip-components=1
           grep -q '^strip *=' Cargo.toml && \
             perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || \
-            (grep -q '^\[profile\.release\]' Cargo.toml && \
-              perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || \
+            (grep -q '^profile\.release' Cargo.toml && \
+              perl -pi -e 's/^profile\.release.*/$&\nstrip = true/' Cargo.toml || \
               printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
 
       - uses: houseabsolute/actions-rust-cross@v0
@@ -118,11 +118,10 @@ jobs:
             done
           else
             while IFS= read -r -d '' f; do
-              fname=$(basename "$f")
               [[ -x "$f" ]] || continue
-              BINS+=("$fname")
-            done < <(find "$RELEASE_DIR" -maxdepth 1 \( -type f -o -type l \) \
-              \( -name "*${EXE}" -o ! -name "*.*" \) -print0 2>/dev/null | sort -z)
+              BINS+=("$(basename "$f")")
+            done < <(find "$RELEASE_DIR" -maxdepth 1 -type f -o -type l \
+              -name "*${EXE}" -o ! -name "*.*" -print0 2>/dev/null | sort -z)
           fi
 
           if [[ ${#BINS[@]} -eq 0 ]]; then
@@ -135,10 +134,8 @@ jobs:
           if [[ "$USE_UPX" != "false" ]]; then
             for bin in "${BINS[@]}"; do
               echo "UPX 压缩: $bin"
-              upx --best --lzma "${RELEASE_DIR}/${bin}" || echo "::warning::UPX 压缩 $bin 失败（可能不支持该格式），跳过"
+              upx --best --lzma "${RELEASE_DIR}/${bin}" || echo "::warning::UPX 压缩 $bin 失败，跳过"
             done
-          else
-            echo "已跳过 UPX 压缩"
           fi
 
           echo "打包文件到 ${ARTIFACT_BASE}.txz ..."
@@ -146,7 +143,6 @@ jobs:
             xz -9evvM55% -T1 --block-size=256M \
                --lzma2=preset=9e,dict=32M,depth=1000 \
             > "${ARTIFACT_BASE}.txz"
-
           echo "打包完成: ${ARTIFACT_BASE}.txz"
           ls -lh "${ARTIFACT_BASE}.txz"
 
@@ -161,32 +157,9 @@ jobs:
           RELEASE_DIR="target/${TARGET}/release"
           TXZ="${ARTIFACT_BASE}.txz"
 
-          # ── CRC-64/XZ（XZ Utils 内置，输出格式: "CRC64 (file) = HEXVAL"）──
-          crc64() {
-            # xz --check=crc64 仅校验，不输出值；改用 python3 快速计算
-            # poly=0xad93d23594c935a9 (CRC-64/XZ aka CRC-64/ECMA-182)
-            python3 - "$1" <<'PYEOF'
-          import sys, struct
-          POLY = 0xad93d23594c935a9
-          table = []
-          for i in range(256):
-              crc = i
-              for _ in range(8):
-                  crc = (crc >> 1) ^ (POLY if crc & 1 else 0)
-              table.append(crc)
-          crc = 0xffffffffffffffff
-          with open(sys.argv[1], 'rb') as f:
-              for chunk in iter(lambda: f.read(65536), b''):
-                  for b in chunk:
-                      crc = (crc >> 8) ^ table[(crc ^ b) & 0xff]
-          print(format(crc ^ 0xffffffffffffffff, '016x'))
-          PYEOF
-          }
-
+          crc64() { 7z h -scrcCRC64 "$1" | awk '/CRC64/{print $2}'; }
           sha256() { sha256sum "$1" | awk '{print $1}'; }
-          sha512() { sha512sum "$1" | awk '{print $1}'; }
 
-          # ── 收集要计算的二进制列表（与 Package 步骤逻辑一致）──
           declare -a BINS=()
           if [[ -n "$NAMES_INPUT" ]]; then
             IFS=',' read -ra NAME_LIST <<< "$NAMES_INPUT"
@@ -202,35 +175,10 @@ jobs:
             while IFS= read -r -d '' f; do
               [[ -x "$f" ]] || continue
               BINS+=("$(basename "$f")")
-            done < <(find "$RELEASE_DIR" -maxdepth 1 \( -type f -o -type l \) \
-              \( -name "*${EXE}" -o ! -name "*.*" \) -print0 2>/dev/null | sort -z)
+            done < <(find "$RELEASE_DIR" -maxdepth 1 -type f -o -type l \
+              -name "*${EXE}" -o ! -name "*.*" -print0 2>/dev/null | sort -z)
           fi
 
-          # ── 写入 Job Summary ──
           {
-            echo "## $ARTIFACT_BASE"
+            echo "## ${ARTIFACT_BASE}"
             echo ""
-            echo "| 文件 | CRC-64/XZ | SHA-256 | SHA-512 |"
-            echo "|------|-----------|---------|---------|"
-
-            # 二进制行
-            for bin in "${BINS[@]}"; do
-              f="${RELEASE_DIR}/${bin}"
-              c=$(crc64 "$f")
-              s2=$(sha256 "$f")
-              s5=$(sha512 "$f")
-              echo "| \`${bin}\` (二进制) | \`$c\` | \`$s2\` | \`$s5\` |"
-            done
-
-            # 压缩包行
-            c=$(crc64 "$TXZ")
-            s2=$(sha256 "$TXZ")
-            s5=$(sha512 "$TXZ")
-            echo "| \`${TXZ}\` (压缩包) | \`$c\` | \`$s2\` | \`$s5\` |"
-
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          path: ${{ matrix.s.b }}-${{ matrix.t.t }}.txz
