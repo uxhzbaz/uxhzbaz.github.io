@@ -75,7 +75,7 @@ jobs:
         run: echo "EXE=.exe" >> $GITHUB_ENV
       - shell: bash
         run: |
-          BIN=$(ls "target/${{ matrix.t.t }}/release" | grep -Ev '\.(d|rmeta|rlib|so|a)$|^build-' | head -1)
+          BIN=$(find "target/${{ matrix.t.t }}/release" -maxdepth 1 -type f -executable -print -quit)
           A="${{ matrix.s.b }}-${{ matrix.t.t }}"
           upx --best --lzma "target/${{ matrix.t.t }}/release/$BIN"
           tar -cf - -C "target/${{ matrix.t.t }}/release" "$BIN" | \
