@@ -1,11 +1,13 @@
 name: B
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 on:
   workflow_dispatch:
     inputs:
       u:
         default: 'https://github.com/svenstaro/miniserve/archive/refs/tags/v0.35.0.tar.gz,https://github.com/magic-wormhole/magic-wormhole.rs/archive/refs/tags/0.8.1.tar.gz'
       t:
-        default: 'x86_64-unknown-linux-musl,x86_64-pc-windows-msvc'
+        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
 jobs:
   s:
     runs-on: ubuntu-latest
@@ -34,27 +36,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - if: startsWith(matrix.t.o, 'ubuntu')
         run: sudo apt install -y musl-tools
-      - id: d
-        shell: bash
+      - shell: bash
         run: |
           curl -sL ${{ matrix.u }} -o s.tgz
-          D=$(tar -tzf s.tgz 2>/dev/null | head -1 | cut -f1 -d"/" || true)
-          tar -xzf s.tgz
-          cd $D
+          tar -xzf s.tgz --strip-components=1
           grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || (grep -q '^\[profile\.release\]' Cargo.toml && perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
-          echo "d=$D" >> $GITHUB_OUTPUT
+          echo "N=$(echo '${{ matrix.u }}' | awk -F/ '{print $5}')" >> $GITHUB_ENV
       - uses: houseabsolute/actions-rust-cross@v0
         with:
           command: build
-          args: --manifest-path ${{ steps.d.outputs.d }}/Cargo.toml --release --locked ${{ matrix.t.c }}
+          args: --release --locked ${{ matrix.t.c }}
           target: ${{ matrix.t.t }}
+      - name: Set exe extension for Windows
+        run: echo "EXE=.exe" >> $env:GITHUB_ENV
+        if: startsWith(matrix.t.o, 'windows')
       - shell: bash
         run: |
           mkdir out
-          for f in ${{ steps.d.outputs.d }}/target/${{ matrix.t.t }}/release/*; do
+          for f in target/${{ matrix.t.t }}/release/*; do
             if [[ -f "$f" && (! "$f" == *.* || "$f" == *.exe) ]]; then cp "$f" out/; fi
           done
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.d.outputs.d }}-${{ matrix.t.t }}
+          name: ${{ env.N }}-${{ matrix.t.t }}
           path: out/*
