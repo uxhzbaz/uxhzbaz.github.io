@@ -104,25 +104,19 @@ jobs:
           EXE: ${{ env.EXE }}
         run: |
           RELEASE_DIR="target/${TARGET}/release"
-
-          # 收集要打包的二进制文件列表
           declare -a BINS=()
 
           if [[ -n "$NAMES_INPUT" ]]; then
-            # 用户指定了二进制名称，逗号分隔，支持通配符匹配
             IFS=',' read -ra NAME_LIST <<< "$NAMES_INPUT"
             for name in "${NAME_LIST[@]}"; do
               name="${name# }"; name="${name% }"
-              # 用 glob 匹配（支持 * ? 等通配符）
               while IFS= read -r -d '' f; do
                 fname=$(basename "$f")
-                # 排除 .d 依赖文件、.rlib、.rmeta、build脚本等非目标产物
                 [[ "$fname" == *.* ]] && continue
                 BINS+=("$fname")
               done < <(find "$RELEASE_DIR" -maxdepth 1 -name "${name}${EXE}" -type f -print0 2>/dev/null)
             done
           else
-            # 自动检测：release 目录下所有可执行文件（无扩展名 或 .exe）
             while IFS= read -r -d '' f; do
               fname=$(basename "$f")
               [[ -x "$f" ]] || continue
@@ -138,7 +132,6 @@ jobs:
 
           echo "找到以下二进制文件: ${BINS[*]}"
 
-          # UPX 压缩（可选）
           if [[ "$USE_UPX" != "false" ]]; then
             for bin in "${BINS[@]}"; do
               echo "UPX 压缩: $bin"
@@ -148,7 +141,6 @@ jobs:
             echo "已跳过 UPX 压缩"
           fi
 
-          # 打包：所有匹配的二进制一起打进同一个 .txz
           echo "打包文件到 ${ARTIFACT_BASE}.txz ..."
           tar -cf - -C "$RELEASE_DIR" "${BINS[@]}" | \
             xz -9evvM55% -T1 --block-size=256M \
@@ -157,6 +149,86 @@ jobs:
 
           echo "打包完成: ${ARTIFACT_BASE}.txz"
           ls -lh "${ARTIFACT_BASE}.txz"
+
+      - name: Generate checksums and summary table
+        shell: bash
+        env:
+          TARGET: ${{ matrix.t.t }}
+          ARTIFACT_BASE: ${{ matrix.s.b }}-${{ matrix.t.t }}
+          EXE: ${{ env.EXE }}
+          NAMES_INPUT: ${{ github.event.inputs.n }}
+        run: |
+          RELEASE_DIR="target/${TARGET}/release"
+          TXZ="${ARTIFACT_BASE}.txz"
+
+          # ── CRC-64/XZ（XZ Utils 内置，输出格式: "CRC64 (file) = HEXVAL"）──
+          crc64() {
+            # xz --check=crc64 仅校验，不输出值；改用 python3 快速计算
+            # poly=0xad93d23594c935a9 (CRC-64/XZ aka CRC-64/ECMA-182)
+            python3 - "$1" <<'PYEOF'
+          import sys, struct
+          POLY = 0xad93d23594c935a9
+          table = []
+          for i in range(256):
+              crc = i
+              for _ in range(8):
+                  crc = (crc >> 1) ^ (POLY if crc & 1 else 0)
+              table.append(crc)
+          crc = 0xffffffffffffffff
+          with open(sys.argv[1], 'rb') as f:
+              for chunk in iter(lambda: f.read(65536), b''):
+                  for b in chunk:
+                      crc = (crc >> 8) ^ table[(crc ^ b) & 0xff]
+          print(format(crc ^ 0xffffffffffffffff, '016x'))
+          PYEOF
+          }
+
+          sha256() { sha256sum "$1" | awk '{print $1}'; }
+          sha512() { sha512sum "$1" | awk '{print $1}'; }
+
+          # ── 收集要计算的二进制列表（与 Package 步骤逻辑一致）──
+          declare -a BINS=()
+          if [[ -n "$NAMES_INPUT" ]]; then
+            IFS=',' read -ra NAME_LIST <<< "$NAMES_INPUT"
+            for name in "${NAME_LIST[@]}"; do
+              name="${name# }"; name="${name% }"
+              while IFS= read -r -d '' f; do
+                fname=$(basename "$f")
+                [[ "$fname" == *.* ]] && continue
+                BINS+=("$fname")
+              done < <(find "$RELEASE_DIR" -maxdepth 1 -name "${name}${EXE}" -type f -print0 2>/dev/null)
+            done
+          else
+            while IFS= read -r -d '' f; do
+              [[ -x "$f" ]] || continue
+              BINS+=("$(basename "$f")")
+            done < <(find "$RELEASE_DIR" -maxdepth 1 \( -type f -o -type l \) \
+              \( -name "*${EXE}" -o ! -name "*.*" \) -print0 2>/dev/null | sort -z)
+          fi
+
+          # ── 写入 Job Summary ──
+          {
+            echo "## $ARTIFACT_BASE"
+            echo ""
+            echo "| 文件 | CRC-64/XZ | SHA-256 | SHA-512 |"
+            echo "|------|-----------|---------|---------|"
+
+            # 二进制行
+            for bin in "${BINS[@]}"; do
+              f="${RELEASE_DIR}/${bin}"
+              c=$(crc64 "$f")
+              s2=$(sha256 "$f")
+              s5=$(sha512 "$f")
+              echo "| \`${bin}\` (二进制) | \`$c\` | \`$s2\` | \`$s5\` |"
+            done
+
+            # 压缩包行
+            c=$(crc64 "$TXZ")
+            s2=$(sha256 "$TXZ")
+            s5=$(sha512 "$TXZ")
+            echo "| \`${TXZ}\` (压缩包) | \`$c\` | \`$s2\` | \`$s5\` |"
+
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
