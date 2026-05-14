@@ -7,17 +7,17 @@ on:
       t:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
-        description: 'cargo build --locked[ture/false]'
+        description: 'cargo build --locked (true/false)'
         default: 'true'
         required: false
-      bn:
-        description: 'Binary names (comma-separated, empty=auto detect)'
+      n:
+        description: '指定打包的二进制名称，逗号分隔（留空则自动检测所有二进制）'
         default: ''
         required: false
       upx:
-        description: 'Enable UPX compression'
-        type: boolean
-        default: true
+        description: '使用 UPX 压缩 (true/false)'
+        default: 'true'
+        required: false
 
 jobs:
   s:
@@ -31,16 +31,14 @@ jobs:
         env:
           U: ${{ github.event.inputs.u }}
           T: ${{ github.event.inputs.t }}
-          BN: ${{ github.event.inputs.bn }}
         run: |
-          sources='['; IFS=','; i=0; bn=(); for n in $BN; do bn+=("${n# }"); done
-          for u in $U; do
+          sources='['; IFS=','; for u in $U; do
             u=${u# }; u=${u% }
             r=${u%%/archive/*}; r=${r##*/}
-            if [ $i -lt ${#bn[@]} ]; then b="${bn[$i]}"
-            else b="$r"; [ "$r" = "magic-wormhole.rs" ] && b="wormhole-rs"; fi
-            ((i++))
-            sources+="{\"u\":\"$u\",\"b\":\"$b\"},"
+            tag=${u##*/archive/refs/tags/}
+            tag=${tag%.tar.gz}; tag=${tag%.tar.xz}; tag=${tag%.zip}; tag=${tag%.tgz}; tag=${tag%.*}
+            b="${r}-${tag}"
+            sources+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"$b\"},"
           done; sources="${sources%,}]"
           targets='['; for t in $T; do
             t=${t# }; t=${t% }
@@ -65,46 +63,101 @@ jobs:
         t: ${{ fromJSON(needs.s.outputs.t) }}
     steps:
       - uses: dtolnay/rust-toolchain@stable
+
       - if: runner.os == 'Linux'
         run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl xz-utils
+
       - if: runner.os == 'Windows'
         run: choco install upx
+
       - if: runner.os == 'macOS'
         run: brew install upx xz
-      - shell: bash
+
+      - name: Download and extract source
+        shell: bash
         run: |
           curl -sL ${{ matrix.s.u }} | tar -xz --strip-components=1
-          grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || (grep -q '^\[profile\.release\]' Cargo.toml && perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
+          grep -q '^strip *=' Cargo.toml && \
+            perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || \
+            (grep -q '^\[profile\.release\]' Cargo.toml && \
+              perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || \
+              printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
+
       - uses: houseabsolute/actions-rust-cross@v0
         with:
           command: build
           args: --release ${{ github.event.inputs.l != 'false' && '--locked' || '' }} ${{ matrix.t.c }}
           target: ${{ matrix.t.t }}
+
       - name: Set exe extension
         if: runner.os == 'Windows'
+        shell: bash
         run: echo "EXE=.exe" >> $GITHUB_ENV
-      - name: Find and rename binary
+
+      - name: Package binaries
         shell: bash
+        env:
+          NAMES_INPUT: ${{ github.event.inputs.n }}
+          USE_UPX: ${{ github.event.inputs.upx }}
+          TARGET: ${{ matrix.t.t }}
+          ARTIFACT_BASE: ${{ matrix.s.b }}-${{ matrix.t.t }}
+          EXE: ${{ env.EXE }}
         run: |
-          RELEASE_DIR="target/${{ matrix.t.t }}/release"
-          DEST="$RELEASE_DIR/${{ matrix.s.b }}${{ env.EXE }}"
-          if [ ! -f "$DEST" ]; then
-            FOUND=$(find "$RELEASE_DIR" -maxdepth 1 -type f -name "${{ matrix.s.b }}*${{ env.EXE }}" ! -name "*.d" ! -name "*.rlib" | head -1)
-            if [ -z "$FOUND" ]; then
-              FOUND=$(find "$RELEASE_DIR" -maxdepth 1 -type f -executable ! -name "*.d" ! -name "*.rlib" ! -name "build" | head -1)
-            fi
-            [ -n "$FOUND" ] && mv "$FOUND" "$DEST"
+          RELEASE_DIR="target/${TARGET}/release"
+
+          # 收集要打包的二进制文件列表
+          declare -a BINS=()
+
+          if [[ -n "$NAMES_INPUT" ]]; then
+            # 用户指定了二进制名称，逗号分隔，支持通配符匹配
+            IFS=',' read -ra NAME_LIST <<< "$NAMES_INPUT"
+            for name in "${NAME_LIST[@]}"; do
+              name="${name# }"; name="${name% }"
+              # 用 glob 匹配（支持 * ? 等通配符）
+              while IFS= read -r -d '' f; do
+                fname=$(basename "$f")
+                # 排除 .d 依赖文件、.rlib、.rmeta、build脚本等非目标产物
+                [[ "$fname" == *.* ]] && continue
+                BINS+=("$fname")
+              done < <(find "$RELEASE_DIR" -maxdepth 1 -name "${name}${EXE}" -type f -print0 2>/dev/null)
+            done
+          else
+            # 自动检测：release 目录下所有可执行文件（无扩展名 或 .exe）
+            while IFS= read -r -d '' f; do
+              fname=$(basename "$f")
+              [[ -x "$f" ]] || continue
+              BINS+=("$fname")
+            done < <(find "$RELEASE_DIR" -maxdepth 1 \( -type f -o -type l \) \
+              \( -name "*${EXE}" -o ! -name "*.*" \) -print0 2>/dev/null | sort -z)
           fi
-      - name: UPX compress
-        if: ${{ github.event.inputs.upx != 'false' }}
-        shell: bash
-        run: |
-          upx --best --lzma "target/${{ matrix.t.t }}/release/${{ matrix.s.b }}${{ env.EXE }}"
-      - shell: bash
-        run: |
-          A="${{ matrix.s.b }}-${{ matrix.t.t }}"
-          tar -cf - -C "target/${{ matrix.t.t }}/release" "${{ matrix.s.b }}${{ env.EXE }}" | \
-          xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "$A.txz"
+
+          if [[ ${#BINS[@]} -eq 0 ]]; then
+            echo "::error::未找到任何匹配的二进制文件，请检查 n 参数或构建产物"
+            exit 1
+          fi
+
+          echo "找到以下二进制文件: ${BINS[*]}"
+
+          # UPX 压缩（可选）
+          if [[ "$USE_UPX" != "false" ]]; then
+            for bin in "${BINS[@]}"; do
+              echo "UPX 压缩: $bin"
+              upx --best --lzma "${RELEASE_DIR}/${bin}" || echo "::warning::UPX 压缩 $bin 失败（可能不支持该格式），跳过"
+            done
+          else
+            echo "已跳过 UPX 压缩"
+          fi
+
+          # 打包：所有匹配的二进制一起打进同一个 .txz
+          echo "打包文件到 ${ARTIFACT_BASE}.txz ..."
+          tar -cf - -C "$RELEASE_DIR" "${BINS[@]}" | \
+            xz -9evvM55% -T1 --block-size=256M \
+               --lzma2=preset=9e,dict=32M,depth=1000 \
+            > "${ARTIFACT_BASE}.txz"
+
+          echo "打包完成: ${ARTIFACT_BASE}.txz"
+          ls -lh "${ARTIFACT_BASE}.txz"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.s.b }}-${{ matrix.t.t }}
