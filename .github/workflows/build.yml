@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           curl -sL ${{ matrix.u }} -o s.tgz
-          D=$(tar -tzf s.tgz | head -1 | cut -f1 -d"/")
+          D=$(tar -tzf s.tgz 2>/dev/null | head -1 | cut -f1 -d"/" || true)
           tar -xzf s.tgz
           cd $D
           grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || (grep -q '^\[profile\.release\]' Cargo.toml && perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
