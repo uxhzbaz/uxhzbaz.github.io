@@ -7,7 +7,7 @@ on:
       t:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
-        description: 'Use --locked'
+        description: 'cargo build --locked[ture/false]'
         default: 'true'
         required: false
 
@@ -75,11 +75,11 @@ jobs:
         run: echo "EXE=.exe" >> $GITHUB_ENV
       - shell: bash
         run: |
-          B="target/${{ matrix.t.t }}/release/${{ matrix.s.b }}${{ env.EXE }}"
-          A="${{ matrix.s.b }}-${{ matrix.t.t }}"
-          upx --best --lzma "$B"
-          tar -cf - -C "target/${{ matrix.t.t }}/release" "${{ matrix.s.b }}${{ env.EXE }}" | \
-          xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "$A.txz"
+    BIN=$(ls "target/${{ matrix.t.t }}/release" | grep -Ev '\.(d|rmeta|rlib|so|a)$|^build-' | head -1)
+    A="${{ matrix.s.b }}-${{ matrix.t.t }}"
+    upx --best --lzma "target/${{ matrix.t.t }}/release/$BIN"
+    tar -cf - -C "target/${{ matrix.t.t }}/release" "$BIN" | \
+    xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "$A.txz"
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.s.b }}-${{ matrix.t.t }}
