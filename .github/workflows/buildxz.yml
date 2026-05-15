@@ -49,15 +49,13 @@ jobs:
 
       - name: Install Zig
         run: |
-          ZIG_VERSION="${{ inputs.zig_version }}"
-          ARCH=$(uname -m)
-          ZIG_PKG="zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz"
-          ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_PKG}"
-          curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz
-          tar -C /usr/local -xJf /tmp/zig.tar.xz
-          ZIG_DIR=$(tar -tf /tmp/zig.tar.xz | head -1 | cut -d/ -f1)
-          ln -s /usr/local/${ZIG_DIR}/zig /usr/local/bin/zig
-          zig version
+          ZV="${{ inputs.zig_version }}"
+          ZP="zig-$(uname -m)-linux-${ZV}.tar.xz"
+          curl -fsSL "https://ziglang.org/download/${ZV}/${ZP}" -o /tmp/z.tar.xz
+          mkdir -p ~/zig && tar -C ~/zig -xJf /tmp/z.tar.xz
+          ZD=$(tar -tf /tmp/z.tar.xz | head -1 | cut -d/ -f1)
+          echo "$HOME/zig/${ZD}" >> $GITHUB_PATH
+          $HOME/zig/${ZD}/zig version
 
       - name: Build xz
         env:
