@@ -23,8 +23,8 @@ on:
         required: false
 
 env:
-  TOOLCHAIN_VERSION: '14.2.0'
-  TOOLCHAIN_BASE: 'https://github.com/benjaminwan/musl-cross-builder/releases/download/14.2.0'
+  TOOLCHAIN_TAG: '20250929'
+  TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20250929'
 
 jobs:
   s:
@@ -38,28 +38,35 @@ jobs:
         shell: bash
         env:
           TARGETS: ${{ github.event.inputs.targets }}
-          TOOLCHAIN_BASE: 'https://github.com/benjaminwan/musl-cross-builder/releases/download/14.2.0'
-          TOOLCHAIN_VERSION: '14.2.0'
+          TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20250929'
         run: |
           include='[]'
           first_key=''
           IFS=',' read -ra TS <<< "$TARGETS"
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
+            # 用户输入的短三元组 -> 工具链完整三元组
             case "$t" in
-              x86_64-linux-musl)    tc_url="${TOOLCHAIN_BASE}/x86_64-linux-musl-${TOOLCHAIN_VERSION}.7z"    ;;
-              aarch64-linux-musl)   tc_url="${TOOLCHAIN_BASE}/aarch64-linux-musl-${TOOLCHAIN_VERSION}.7z"   ;;
-              i686-linux-musl)      tc_url="${TOOLCHAIN_BASE}/i686-linux-musl-${TOOLCHAIN_VERSION}.7z"      ;;
-              arm-linux-musleabi)   tc_url="${TOOLCHAIN_BASE}/arm-linux-musleabi-${TOOLCHAIN_VERSION}.7z"   ;;
-              armv7-linux-musleabi) tc_url="${TOOLCHAIN_BASE}/armv7-linux-musleabi-${TOOLCHAIN_VERSION}.7z" ;;
+              x86_64-linux-musl)    tc_triple="x86_64-unknown-linux-musl"   ;;
+              aarch64-linux-musl)   tc_triple="aarch64-unknown-linux-musl"  ;;
+              i686-linux-musl)      tc_triple="i686-unknown-linux-musl"     ;;
+              arm-linux-musleabi)   tc_triple="arm-unknown-linux-musleabi"  ;;
+              armv7-linux-musleabi) tc_triple="armv7-unknown-linux-musleabi" ;;
+              # 也接受完整三元组直接输入
+              x86_64-unknown-linux-musl)    tc_triple="x86_64-unknown-linux-musl"   ;;
+              aarch64-unknown-linux-musl)   tc_triple="aarch64-unknown-linux-musl"  ;;
+              i686-unknown-linux-musl)      tc_triple="i686-unknown-linux-musl"     ;;
+              arm-unknown-linux-musleabi)   tc_triple="arm-unknown-linux-musleabi"  ;;
+              armv7-unknown-linux-musleabi) tc_triple="armv7-unknown-linux-musleabi" ;;
               *)
                 echo "::warning::未知目标 $t，跳过"
                 continue
                 ;;
             esac
+            tc_url="${TOOLCHAIN_BASE}/${tc_triple}.tar.xz"
             include=$(jq \
-              --arg t "$t" --arg tc_url "$tc_url" \
-              '. += [{"t":$t,"tc_url":$tc_url}]' \
+              --arg t "$t" --arg tc_triple "$tc_triple" --arg tc_url "$tc_url" \
+              '. += [{"t":$t,"tc_triple":$tc_triple,"tc_url":$tc_url}]' \
               <<< "$include")
             [[ -z "$first_key" ]] && first_key="$t"
           done
@@ -79,20 +86,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/toolchain
-          key: musl-toolchain-${{ matrix.t }}-${{ env.TOOLCHAIN_VERSION }}
+          key: musl-toolchain-${{ matrix.tc_triple }}-${{ env.TOOLCHAIN_TAG }}
 
       - name: 下载并解压工具链
         if: steps.cache-tc.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.7z
+          curl -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.tar.xz
           mkdir -p "${{ github.workspace }}/toolchain"
-          bsdtar -xf toolchain.7z -C "${{ github.workspace }}/toolchain"
-          inner=$(find "${{ github.workspace }}/toolchain" -mindepth 1 -maxdepth 1 -type d | head -1)
-          if [[ -n "$inner" ]]; then
-            shopt -s dotglob
-            mv "$inner"/* "${{ github.workspace }}/toolchain/"
-            rmdir "$inner"
-          fi
+          tar -xf toolchain.tar.xz -C "${{ github.workspace }}/toolchain" --strip-components=1
 
       - name: 下载并解压源码
         run: |
@@ -104,17 +105,18 @@ jobs:
 
       - name: 编译
         run: |
+          TC="${{ matrix.tc_triple }}"
           export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
-          export CC="${{ matrix.t }}-gcc"
-          export CXX="${{ matrix.t }}-g++"
-          export AR="${{ matrix.t }}-ar"
-          export RANLIB="${{ matrix.t }}-ranlib"
-          export STRIP="${{ matrix.t }}-strip"
+          export CC="${TC}-gcc"
+          export CXX="${TC}-g++"
+          export AR="${TC}-ar"
+          export RANLIB="${TC}-ranlib"
+          export STRIP="${TC}-strip"
           export CFLAGS="-static -Os"
           export LDFLAGS="-static"
           cd src
           ./configure \
-            --host="${{ matrix.t }}" \
+            --host="${TC}" \
             --prefix=/usr \
             ${{ github.event.inputs.configure_args }}
           make -j$(nproc)
@@ -122,8 +124,9 @@ jobs:
       - name: 收集并 strip 二进制
         run: |
           TARGET="${{ matrix.t }}"
+          TC="${{ matrix.tc_triple }}"
           NAMES_INPUT="${{ github.event.inputs.binary_names }}"
-          STRIP_BIN="${{ github.workspace }}/toolchain/bin/${{ matrix.t }}-strip"
+          STRIP_BIN="${{ github.workspace }}/toolchain/bin/${TC}-strip"
 
           declare -a BINS=()
           if [[ -n "$NAMES_INPUT" ]]; then
