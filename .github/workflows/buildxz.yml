@@ -1,17 +1,14 @@
-name: Build xz
+name: Build xz (Alpine native, musl static)
 
 on:
   workflow_dispatch:
     inputs:
       source_url:
         description: 'XZ source tarball URL (.tar.gz or .tar.xz)'
-        default: 'https://raw.githubusercontent.com/uxhzbaz/uxhzbaz.github.io/refs/heads/main/xz-5.8.3-zh_CN.tar.xz'
+        default: 'https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.xz'
       targets:
         description: 'Comma-separated target triples'
         default: 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi'
-      zig_version:
-        description: 'Zig version (used for non-x86_64 musl targets)'
-        default: '0.15.1'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -29,7 +26,15 @@ jobs:
           json='['
           IFS=','; for t in $T; do
             t=${t# }; t=${t% }
-            json+="\"$t\","
+            # map target triple to Docker platform and Alpine image
+            case "$t" in
+              x86_64-linux-musl)        platform="linux/amd64";   image="amd64/alpine:edge" ;;
+              aarch64-linux-musl)       platform="linux/arm64";   image="arm64v8/alpine:edge" ;;
+              i686-linux-musl)          platform="linux/386";     image="i386/alpine:edge" ;;
+              arm-linux-musleabi)       platform="linux/arm/v7";  image="arm32v7/alpine:edge" ;;
+              *)                        platform=""; image="" ;;
+            esac
+            json+="{\"t\":\"$t\",\"platform\":\"$platform\",\"image\":\"$image\"},"
           done
           json="${json%,}]"
           echo "targets=$json" >> $GITHUB_OUTPUT
@@ -44,84 +49,69 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install host deps
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y xz-utils curl tar musl-tools
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Install Zig (for non-x86_64 targets)
-        if: matrix.target != 'x86_64-linux-musl'
-        run: |
-          ZV="${{ inputs.zig_version }}"
-          ZP="zig-$(uname -m)-linux-${ZV}.tar.xz"
-          curl -fsSL "https://ziglang.org/download/${ZV}/${ZP}" -o /tmp/z.tar.xz
-          mkdir -p ~/zig && tar -C ~/zig -xJf /tmp/z.tar.xz
-          ZD=$(tar -tf /tmp/z.tar.xz | head -1 | cut -d/ -f1)
-          echo "$HOME/zig/${ZD}" >> $GITHUB_PATH
-
-      - name: Build xz
+      - name: Build in Alpine container
         env:
-          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.target.platform }}
+          IMAGE: ${{ matrix.target.image }}
+          TARGET: ${{ matrix.target.t }}
+          SOURCE_URL: ${{ inputs.source_url }}
         run: |
-          set -e
-          # Download & extract source
-          URL="${{ inputs.source_url }}"
-          EXT="${URL##*.}"
-          curl -sL "$URL" -o /tmp/src.tar.${EXT}
-          case "${EXT}" in
-            gz)  tar -xzf /tmp/src.tar.${EXT} --strip-components=1 ;;
-            xz)  tar -xJf /tmp/src.tar.${EXT} --strip-components=1 ;;
-            *)   tar -xf /tmp/src.tar.${EXT} --strip-components=1 ;;
-          esac
+          docker run --rm --platform "${PLATFORM}" \
+            -v "$PWD":/work -w /work \
+            "${IMAGE}" sh -c '
+              set -e
+              apk add --no-cache curl tar xz build-base
 
-          BUILD=$(gcc -dumpmachine)   # e.g. x86_64-linux-gnu
-          HOST="${TARGET}"
+              # download and extract source
+              URL="${{ inputs.source_url }}"
+              EXT="${URL##*.}"
+              curl -sL "$URL" -o /tmp/src.tar.${EXT}
+              case "${EXT}" in
+                gz) tar -xzf /tmp/src.tar.${EXT} ;;
+                xz) tar -xJf /tmp/src.tar.${EXT} ;;
+                *)  tar -xf /tmp/src.tar.${EXT} ;;
+              esac
+              cd xz-*
 
-          # --- Set up compiler -------------------------------------------------
-          if [ "${TARGET}" = "x86_64-linux-musl" ]; then
-            # Use musl-gcc available from musl-tools
-            export CC=musl-gcc
-            export CFLAGS="-O2 -fno-pie"
-            export LDFLAGS="-static -no-pie"
-          else
-            # Use Zig for cross compilation
-            export CC="zig cc -target ${TARGET}"
-            export CFLAGS="-O2 -static"
-            export LDFLAGS="-static"
-          fi
+              # configure & compile (static musl, matching Alpine APKBUILD)
+              CFLAGS="-O2" \
+              ./configure \
+                --disable-nls \
+                --disable-shared \
+                --enable-static \
+                --disable-threads \
+                --disable-sandbox \
+                --disable-xzdec \
+                --disable-lzmadec \
+                --disable-lzmainfo \
+                --disable-lzma-links \
+                --disable-rpath \
+                --disable-werror \
+                --disable-doc
 
-          # --- Configure & make ------------------------------------------------
-          ./configure \
-            --build="${BUILD}" \
-            --host="${HOST}" \
-            --disable-nls \
-            --disable-shared \
-            --enable-static \
-            --disable-threads \
-            --disable-sandbox \
-            --disable-xzdec \
-            --disable-lzmadec \
-            --disable-lzmainfo \
-            --disable-lzma-links
+              make -j$(nproc)
+              strip src/xz/xz
 
-          make -j$(nproc)
-          strip src/xz/xz
-
-          # --- Package ---------------------------------------------------------
-          STAGE="xz-${TARGET}"
-          mkdir -p "${STAGE}"
-          cp src/xz/xz "${STAGE}/"
-          tar -cJf "${STAGE}.tar.xz" "${STAGE}"
-          sha256sum "${STAGE}.tar.xz" | tee "${STAGE}.tar.xz.SHA256"
-          echo "Built: ${STAGE}.tar.xz"
+              # package
+              STAGE="xz-${TARGET}"
+              mkdir -p /work/"${STAGE}"
+              cp src/xz/xz /work/"${STAGE}/"
+              cd /work
+              tar -cJf "${STAGE}.tar.xz" "${STAGE}"
+              sha256sum "${STAGE}.tar.xz" > "${STAGE}.tar.xz.SHA256"
+              echo "Built ${STAGE}.tar.xz"
+            '
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xz-${{ matrix.target }}
+          name: xz-${{ matrix.target.t }}
           path: |
-            xz-${{ matrix.target }}.tar.xz
-            xz-${{ matrix.target }}.tar.xz.SHA256
+            xz-${{ matrix.target.t }}.tar.xz
+            xz-${{ matrix.target.t }}.tar.xz.SHA256
 
   release:
     needs: build
