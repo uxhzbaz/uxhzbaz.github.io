@@ -1,4 +1,4 @@
-name: build
+name: B (XZ Utils static)
 run-name: ${{ github.event.inputs.run_name || github.actor }}
 on:
   workflow_dispatch:
@@ -15,11 +15,7 @@ on:
         default: 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi'
       configure_args:
         description: '额外的 ./configure 参数'
-        default: '--disable-shared --enable-static --disable-nls --disable-xzdec --disable-lzmadec --disable-lzmainfo --disable-lzma-links --disable-scripts --disable-doc'
-        required: false
-      binary_names:
-        description: '要收集的二进制名称，逗号分隔（留空自动检测）'
-        default: ''
+        default: '--disable-shared --enable-static --disable-nls'
         required: false
 
 env:
@@ -101,9 +97,10 @@ jobs:
           mkdir -p src
           tar -xf "src.tar.${EXT}" -C src --strip-components=1
 
-      - name: 编译
+      - name: 编译并安装
         run: |
           TC="${{ matrix.tc_triple }}"
+          INST="${{ github.workspace }}/install"
           export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
           export CC="${TC}-gcc"
           export CXX="${TC}-g++"
@@ -119,47 +116,54 @@ jobs:
             --disable-dependency-tracking \
             ${{ github.event.inputs.configure_args }}
           make -j$(nproc) LDFLAGS="-all-static"
+          make install DESTDIR="$INST"
 
-      - name: 收集并 strip 二进制
+      - name: 收集产物
         run: |
           TARGET="${{ matrix.t }}"
           TC="${{ matrix.tc_triple }}"
-          NAMES_INPUT="${{ github.event.inputs.binary_names }}"
+          INST="${{ github.workspace }}/install"
           STRIP_BIN="${{ github.workspace }}/toolchain/bin/${TC}-strip"
-
-          declare -a BINS=()
-          if [[ -n "$NAMES_INPUT" ]]; then
-            IFS=',' read -ra NL <<< "$NAMES_INPUT"
-            for name in "${NL[@]}"; do
-              name="${name# }"; name="${name% }"
-              while IFS= read -r -d '' f; do
-                BINS+=("$f")
-              done < <(find src -type f -name "$name" -print0 2>/dev/null)
-            done
-          else
-            while IFS= read -r -d '' f; do
-              file "$f" | grep -qE 'ELF.*(executable|shared)' || continue
-              BINS+=("$f")
-            done < <(find src -type f -print0 2>/dev/null)
-          fi
-
-          [[ ${#BINS[@]} -eq 0 ]] && { echo "::error::未找到任何二进制文件"; exit 1; }
-          echo "找到: ${BINS[*]}"
-
           mkdir -p dist
-          for f in "${BINS[@]}"; do
+
+          # ELF 可执行二进制 -> 只用工具本身名字
+          while IFS= read -r -d '' f; do
+            file "$f" | grep -qE 'ELF.*(executable)' || continue
             fname=$(basename "$f")
             "$STRIP_BIN" "$f" 2>/dev/null || true
-            cp "$f" "dist/${TARGET}-${fname}"
+            cp "$f" "dist/${fname}"
+          done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
+
+          # shell 脚本（xzgrep、xzdiff 等）
+          while IFS= read -r -d '' f; do
+            file "$f" | grep -qiE 'shell script|text' || continue
+            fname=$(basename "$f")
+            cp "$f" "dist/${fname}"
+          done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
+
+          # .mo 本地化文件，保留相对路径 locale/xx/LC_MESSAGES/xz.mo
+          find "${INST}" -name '*.mo' | while read -r f; do
+            rel="${f#${INST}/}"
+            mkdir -p "dist/$(dirname "$rel")"
+            cp "$f" "dist/${rel}"
           done
+
+          echo "产物列表:"
+          find dist -type f | sort
 
       - name: 验证静态链接
         run: |
-          for f in dist/*; do
-            file "$f"
-            file "$f" | grep -q "statically linked" || \
-              { echo "::error::$f 未静态链接"; exit 1; }
-          done
+          fail=0
+          while IFS= read -r -d '' f; do
+            file "$f" | grep -qE 'ELF.*executable' || continue
+            if ! file "$f" | grep -q "statically linked"; then
+              echo "::error::$f 未静态链接: $(file "$f")"
+              fail=1
+            else
+              echo "OK: $(basename "$f") - statically linked"
+            fi
+          done < <(find dist -maxdepth 1 -type f -print0)
+          [[ $fail -eq 0 ]] || exit 1
 
       - name: 生成摘要
         env:
@@ -172,19 +176,21 @@ jobs:
             echo "### 🔧 二进制可执行文件校验"
             echo "| 文件 | 大小 | SHA256 | SHA512 |"
             echo "|---|---|---|---|"
-            for f in dist/*; do
+            while IFS= read -r -d '' f; do
+              file "$f" | grep -qE 'ELF.*executable' || continue
               fname=$(basename "$f")
               B_SIZE=$(ls -lh "$f" | awk '{print $5}')
               B_S256=$(sha256sum "$f" | awk '{print $1}')
               B_S512=$(sha512sum "$f" | awk '{print $1}')
               echo "| \`${fname}\` | ${B_SIZE} | \`${B_S256}\` | \`${B_S512}\` |"
-            done
+            done < <(find dist -maxdepth 1 -type f -print0 | sort -z)
           } >> $GITHUB_STEP_SUMMARY
 
           if [[ "$IS_FIRST" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 💡 工具帮助信息" >> $GITHUB_STEP_SUMMARY
-            for f in dist/*; do
+            while IFS= read -r -d '' f; do
+              file "$f" | grep -qE 'ELF.*executable' || continue
               fname=$(basename "$f")
               HELP=$("$f" --help 2>&1 || true)
               {
@@ -195,11 +201,17 @@ jobs:
                 echo '```'
                 echo "</details>"
               } >> $GITHUB_STEP_SUMMARY
-            done
+            done < <(find dist -maxdepth 1 -type f -print0 | sort -z)
           fi
+
+      - name: 打包产物
+        run: |
+          TARGET="${{ matrix.t }}"
+          tar -cJf "${TARGET}.tar.xz" -C dist .
+          echo "打包完成: ${TARGET}.tar.xz ($(ls -lh "${TARGET}.tar.xz" | awk '{print $5}'))"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.t }}
-          path: dist/
+          path: ${{ matrix.t }}.tar.xz
