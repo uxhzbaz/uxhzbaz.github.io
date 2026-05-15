@@ -1,0 +1,125 @@
+name: Build xz
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: 'XZ source tarball URL (.tar.gz or .tar.xz)'
+        default: 'https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.xz'
+      targets:
+        description: 'Comma-separated target triples'
+        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
+      zig_version:
+        description: 'Zig version'
+        default: '0.15.1'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.parse.outputs.targets }}
+    steps:
+      - id: parse
+        shell: bash
+        run: |
+          T='${{ inputs.targets }}'
+          json='['
+          IFS=','; for t in $T; do
+            t=${t# }; t=${t% }
+            json+="\"$t\","
+          done
+          json="${json%,}]"
+          echo "targets=$json" >> $GITHUB_OUTPUT
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.prepare.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host deps
+        run: sudo apt-get update -y && sudo apt-get install -y xz-utils curl tar
+
+      - name: Install Zig
+        run: |
+          ZIG_VERSION="${{ inputs.zig_version }}"
+          ARCH=$(uname -m)
+          ZIG_PKG="zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz"
+          ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_PKG}"
+          curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz
+          tar -C /usr/local -xJf /tmp/zig.tar.xz
+          ZIG_DIR=$(tar -tf /tmp/zig.tar.xz | head -1 | cut -d/ -f1)
+          ln -s /usr/local/${ZIG_DIR}/zig /usr/local/bin/zig
+          zig version
+
+      - name: Build xz
+        env:
+          TARGET: ${{ matrix.target }}
+          ZIG_VERSION: ${{ inputs.zig_version }}
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE"
+          # Download and extract source
+          curl -sL "${{ inputs.source_url }}" | tar -xJ --strip-components=1
+          # Configure for cross musl
+          BUILD=$(gcc -dumpmachine)  # e.g. x86_64-linux-gnu
+          CC="zig cc -target ${TARGET}" \
+          CFLAGS="-O2 -fno-pie" \
+          LDFLAGS="-static -no-pie" \
+          ./configure \
+            --build="${BUILD}" \
+            --host="${TARGET}" \
+            --disable-nls \
+            --disable-shared \
+            --enable-static \
+            --disable-threads \
+            --disable-sandbox \
+            --disable-xzdec \
+            --disable-lzmadec \
+            --disable-lzmainfo \
+            --disable-lzma-links \
+            --without-lzma-wrapper
+          make -j$(nproc)
+          strip src/xz/xz
+          # Package
+          STAGE="xz-${TARGET}"
+          mkdir -p "${STAGE}"
+          cp src/xz/xz "${STAGE}/"
+          tar -cJf "${STAGE}.tar.xz" "${STAGE}"
+          sha256sum "${STAGE}.tar.xz" | tee "${STAGE}.tar.xz.SHA256"
+          echo "Built: ${STAGE}.tar.xz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xz-${{ matrix.target }}
+          path: |
+            xz-${{ matrix.target }}.tar.xz
+            xz-${{ matrix.target }}.tar.xz.SHA256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/**/xz-*.tar.xz
+            dist/**/xz-*.tar.xz.SHA256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
