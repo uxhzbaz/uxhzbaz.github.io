@@ -1,21 +1,26 @@
 name: B
+run-name: ${{ github.event.inputs.run_name || github.actor }}
 on:
   workflow_dispatch:
     inputs:
       run_name:
-        description: '自定义此次工作流显示名称'
-        default: '${{ github.actor }}'
+        description: 'Workflow run name'
+        default: ''
+        required: false
       u:
         default: 'https://github.com/svenstaro/miniserve/archive/refs/tags/v0.35.0.tar.gz,https://github.com/magic-wormhole/magic-wormhole.rs/archive/refs/tags/0.8.1.tar.gz'
       t:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
+        description: 'cargo build --locked (true/false)'
         default: 'true'
         required: false
       n:
+        description: 'Binary names to pack, comma-separated (empty = auto-detect)'
         default: ''
         required: false
       upx:
+        description: 'UPX compression (true/false)'
         default: 'true'
         required: false
 
@@ -32,14 +37,25 @@ jobs:
           U: ${{ github.event.inputs.u }}
           T: ${{ github.event.inputs.t }}
         run: |
-          s='['; IFS=','; for u in $U; do u=${u# }; u=${u% }; r=${u%%/archive/*}; r=${r##*/}; tag=${u##*/archive/refs/tags/}; tag=${tag%.tar.*}; b="${r}-${tag}"; s+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"$b\"},"; done; s="${s%,}]"
-          tarr='['; for t in $T; do t=${t# }; t=${t% }; case $t in *windows*) o=windows-latest ;; *apple*) o=macos-latest ;; *) o=ubuntu-latest ;; esac; c=''; [[ $t == *riscv* ]] && c='--no-default-features'; tarr+="{\"t\":\"$t\",\"o\":\"$o\",\"c\":\"$c\"},"; done; tarr="${tarr%,}]"
-          echo "s=$s" >> $GITHUB_OUTPUT
-          echo "t=$tarr" >> $GITHUB_OUTPUT
+          sources='['; IFS=','; for u in $U; do
+            u=${u# }; u=${u% }
+            r=${u%%/archive/*}; r=${r##*/}
+            tag=${u##*/archive/refs/tags/}
+            tag=${tag%.tar.gz}; tag=${tag%.tar.xz}; tag=${tag%.zip}; tag=${tag%.tgz}; tag=${tag%.*}
+            sources+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"${r}-${tag}\"},"
+          done; sources="${sources%,}]"
+          targets='['; for t in $T; do
+            t=${t# }; t=${t% }
+            case $t in *windows*) o=windows-latest;; *apple*) o=macos-latest;; *) o=ubuntu-latest;; esac
+            c=''; [[ $t == *riscv* ]] && c='--no-default-features'
+            targets+="{\"t\":\"$t\",\"o\":\"$o\",\"c\":\"$c\"},"
+          done; targets="${targets%,}]"
+          echo "s=$sources" >> $GITHUB_OUTPUT
+          echo "t=$targets" >> $GITHUB_OUTPUT
 
   b:
     needs: s
-    name: ${{ github.event.inputs.run_name }} ${{ matrix.s.b }}-${{ matrix.t.t }}
+    name: ${{ matrix.s.b }}-${{ matrix.t.t }}
     runs-on: ${{ matrix.t.o }}
     strategy:
       matrix:
@@ -53,71 +69,85 @@ jobs:
         run: choco install upx
       - if: runner.os == 'macOS'
         run: brew install upx xz
-      - name: Download and extract
+      - name: Download and extract source
         shell: bash
         run: |
           curl -sL ${{ matrix.s.u }} | tar -xz --strip-components=1
-          grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || (grep -q '^\[profile\.release\]' Cargo.toml && perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
+          grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || \
+            (grep -q '^\[profile\.release\]' Cargo.toml && \
+              perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || \
+              printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
       - uses: houseabsolute/actions-rust-cross@v0
         with:
           command: build
           args: --release ${{ github.event.inputs.l != 'false' && '--locked' || '' }} ${{ matrix.t.c }}
           target: ${{ matrix.t.t }}
-      - name: Set exe
-        if: runner.os == 'Windows'
+      - if: runner.os == 'Windows'
         shell: bash
         run: echo "EXE=.exe" >> $GITHUB_ENV
-      - name: Package
+      - name: Pack and summary
         shell: bash
         env:
-          N: ${{ github.event.inputs.n }}
-          UPX: ${{ github.event.inputs.upx }}
-          TGT: ${{ matrix.t.t }}
-          ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          EXE: ${{ env.EXE }}
+          NAMES_INPUT: ${{ github.event.inputs.n }}
+          USE_UPX: ${{ github.event.inputs.upx }}
+          TARGET: ${{ matrix.t.t }}
+          AB: ${{ matrix.s.b }}-${{ matrix.t.t }}
         run: |
-          R="target/${TGT}/release"; BINS=()
-          if [[ -n "$N" ]]; then IFS=',' read -ra L <<< "$N"; for n in "${L[@]}"; do n="${n# }"; n="${n% }"; while IFS= read -r -d '' f; do f=$(basename "$f"); [[ "$f" == *.* ]] && continue; BINS+=("$f"); done < <(find "$R" -maxdepth 1 -name "${n}${EXE}" -type f -print0); done; else while IFS= read -r -d '' f; do [[ -x "$f" ]] || continue; BINS+=("$(basename "$f")"); done < <(find "$R" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z); fi
-          [[ ${#BINS[@]} -eq 0 ]] && echo "::error::未找到二进制" && exit 1
-          [[ "$UPX" != "false" ]] && for b in "${BINS[@]}"; do upx --best --lzma "$R/$b" || echo "::warning::$b UPX失败"; done
-          tar -cf - -C "$R" "${BINS[@]}" | xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "${ART}.txz"
-      - name: Checksums
-        shell: bash
-        env:
-          ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          R: target/${{ matrix.t.t }}/release
-          EXE: ${{ env.EXE }}
-          N: ${{ github.event.inputs.n }}
-        run: |
-          BINS=()
-          if [[ -n "$N" ]]; then
-            IFS=',' read -ra L <<< "$N"
-            for n in "${L[@]}"; do
-              n="${n# }"; n="${n% }"
+          RD="target/${TARGET}/release"
+          declare -a BINS=()
+          if [[ -n "$NAMES_INPUT" ]]; then
+            IFS=',' read -ra NL <<< "$NAMES_INPUT"
+            for name in "${NL[@]}"; do
+              name="${name# }"; name="${name% }"
               while IFS= read -r -d '' f; do
-                [[ "$f" == *.* ]] && continue
-                BINS+=("$(basename "$f")")
-              done < <(find "$R" -maxdepth 1 -name "${n}${EXE}" -type f -print0)
+                fname=$(basename "$f"); [[ "$fname" == *.* ]] && continue; BINS+=("$fname")
+              done < <(find "$RD" -maxdepth 1 -name "${name}${EXE}" -type f -print0 2>/dev/null)
             done
           else
             while IFS= read -r -d '' f; do
-              [[ -x "$f" ]] || continue
-              BINS+=("$(basename "$f")")
-            done < <(find "$R" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z)
+              fname=$(basename "$f"); [[ -x "$f" ]] || continue; BINS+=("$fname")
+            done < <(find "$RD" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 2>/dev/null | sort -z)
+          fi
+          [[ ${#BINS[@]} -eq 0 ]] && { echo "::error::No binaries found"; exit 1; }
+          echo "Found: ${BINS[*]}"
+
+          if [[ "$USE_UPX" != "false" ]]; then
+            for bin in "${BINS[@]}"; do
+              upx --best --lzma "${RD}/${bin}" && echo "UPX ok: $bin" || echo "::warning::UPX failed: $bin"
+            done
           fi
 
-          echo "| File | SHA-256 | SHA-512 |"
-          echo "|------|---------|---------|"
-          for b in "${BINS[@]}"; do
-            f="$R/$b"
-            s256=$(sha256sum "$f" | awk '{print $1}')
-            s512=$(sha512sum "$f" | awk '{print $1}')
-            echo "| \`$b\` (binary) | \`$s256\` | \`$s512\` |"
+          for bin in "${BINS[@]}"; do
+            echo "--- ${bin} --help ---"
+            "${RD}/${bin}" --help || true
           done
-          s256=$(sha256sum "${ART}.txz" | awk '{print $1}')
-          s512=$(sha512sum "${ART}.txz" | awk '{print $1}')
-          echo "| \`${ART}.txz\` (package) | \`$s256\` | \`$s512\` |"
-        } >> "$GITHUB_STEP_SUMMARY"
+
+          tar -cf - -C "$RD" "${BINS[@]}" | \
+            xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "${AB}.txz"
+
+          CRC=$(xz --robot --list "${AB}.txz" | awk 'NR==2{print $5}')
+          S256=$(sha256sum "${AB}.txz" | awk '{print $1}')
+          S512=$(sha512sum "${AB}.txz" | awk '{print $1}')
+          SIZE=$(ls -lh "${AB}.txz" | awk '{print $5}')
+
+          echo "### ${AB} (${SIZE})" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 值 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| 工具-版本-三元组 | \`${AB}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| CRC64/XZ | \`${CRC}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA256 | \`${S256}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA512 | \`${S512}\` |" >> $GITHUB_STEP_SUMMARY
+
+          for bin in "${BINS[@]}"; do
+            HELP=$("${RD}/${bin}" --help 2>&1 || true)
+            echo "<details><summary>${bin} --help</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "$HELP" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.s.b }}-${{ matrix.t.t }}
