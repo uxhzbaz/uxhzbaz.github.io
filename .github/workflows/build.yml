@@ -103,15 +103,6 @@ jobs:
         name: 安装依赖
         run: brew install upx
 
-      - name: 缓存 Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-${{ matrix.t }}-cargo
-
       - name: 下载并解压源码
         shell: bash
         run: |
@@ -121,7 +112,7 @@ jobs:
               perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || \
               printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
 
-      - uses: houseabsolute/actions-rust-cross@v0
+      - uses: houseabsolute/actions-rust-cross@v1
         name: 编译
         with:
           command: build
@@ -172,15 +163,12 @@ jobs:
           fi
 
           declare -a BIN_ROWS=()
-          declare -a UPLOAD_PATHS=()
           for bin in "${BINS[@]}"; do
             B_S256=$(sha256sum "${RD}/${bin}" | awk '{print $1}')
             B_S512=$(sha512sum "${RD}/${bin}" | awk '{print $1}')
             B_SIZE=$(ls -lh "${RD}/${bin}" | awk '{print $5}')
             BIN_ROWS+=("${bin}|${B_SIZE}|${B_S256}|${B_S512}")
-            dest="${AB}-${bin}${EXE}"
-            cp "${RD}/${bin}" "./${dest}"
-            UPLOAD_PATHS+=("./${dest}")
+            cp "${RD}/${bin}" "./${AB}-${bin}${EXE}"
           done
 
           {
@@ -211,10 +199,8 @@ jobs:
             done
           fi
 
-          printf '%s\n' "${UPLOAD_PATHS[@]}" > upload_list.txt
-
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.b }}-${{ matrix.t }}
-          path: upload_list.txt
+          path: ./${{ matrix.b }}-${{ matrix.t }}-*
