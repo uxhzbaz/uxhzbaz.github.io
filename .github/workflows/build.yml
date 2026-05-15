@@ -1,32 +1,34 @@
 name: B
-run-name: ${{ github.event.inputs.run_name }}
+run-name: ${{ github.event.inputs.run_name || github.actor }}
 on:
   workflow_dispatch:
     inputs:
       run_name:
-        description: '自定义运行名称'
-        default: '${{ github.actor }} is learning GitHub Actions'
+        description: '工作流运行名称'
+        default: ''
+        required: false
       u:
-        description: '源码包 URL 列表，逗号分隔'
+        description: '源码包URL，逗号分隔'
         default: 'https://github.com/svenstaro/miniserve/archive/refs/tags/v0.35.0.tar.gz,https://github.com/magic-wormhole/magic-wormhole.rs/archive/refs/tags/0.8.1.tar.gz'
       t:
-        description: '目标三元组列表，逗号分隔'
+        description: '目标三元组，逗号分隔'
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
         description: 'cargo build --locked (true/false)'
         default: 'true'
         required: false
       n:
-        description: '指定打包的二进制名称，逗号分隔（留空则自动检测所有可执行文件）'
+        description: '打包的二进制名称，逗号分隔（留空自动检测，支持通配符）'
         default: ''
         required: false
       upx:
-        description: '使用 UPX 压缩二进制 (true/false)'
+        description: 'UPX 压缩 (true/false)'
         default: 'true'
         required: false
 
 jobs:
   s:
+    name: 解析参数
     runs-on: ubuntu-latest
     outputs:
       s: ${{ steps.p.outputs.s }}
@@ -38,23 +40,16 @@ jobs:
           U: ${{ github.event.inputs.u }}
           T: ${{ github.event.inputs.t }}
         run: |
-          # 取第一个目标三元组，后续只在这个目标上执行 --help
-          first_target=$(echo "$T" | cut -d, -f1 | xargs)
           sources='['; IFS=','; for u in $U; do
             u=${u# }; u=${u% }
             r=${u%%/archive/*}; r=${r##*/}
             tag=${u##*/archive/refs/tags/}
-            tag=${tag%.tar.*}
-            b="${r}-${tag}"
-            sources+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"$b\",\"f\":\"$first_target\"},"
+            tag=${tag%.tar.gz}; tag=${tag%.tar.xz}; tag=${tag%.zip}; tag=${tag%.tgz}; tag=${tag%.*}
+            sources+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"${r}-${tag}\"},"
           done; sources="${sources%,}]"
           targets='['; for t in $T; do
             t=${t# }; t=${t% }
-            case $t in
-              *windows*) o=windows-latest ;;
-              *apple*) o=macos-latest ;;
-              *) o=ubuntu-latest ;;
-            esac
+            case $t in *windows*) o=windows-latest;; *apple*) o=macos-latest;; *) o=ubuntu-latest;; esac
             c=''; [[ $t == *riscv* ]] && c='--no-default-features'
             targets+="{\"t\":\"$t\",\"o\":\"$o\",\"c\":\"$c\"},"
           done; targets="${targets%,}]"
@@ -71,133 +66,123 @@ jobs:
         t: ${{ fromJSON(needs.s.outputs.t) }}
     steps:
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: 安装系统依赖
-        if: runner.os == 'Linux'
+      - if: runner.os == 'Linux'
+        name: 安装依赖
         run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl xz-utils
-
-      - name: 安装 UPX (Windows)
-        if: runner.os == 'Windows'
+      - if: runner.os == 'Windows'
+        name: 安装依赖
         run: choco install upx
-
-      - name: 安装 UPX 和 XZ (macOS)
-        if: runner.os == 'macOS'
+      - if: runner.os == 'macOS'
+        name: 安装依赖
         run: brew install upx xz
-
       - name: 下载并解压源码
         shell: bash
         run: |
           curl -sL ${{ matrix.s.u }} | tar -xz --strip-components=1
-          grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || (grep -q '^\[profile\.release\]' Cargo.toml && perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
-
+          grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || \
+            (grep -q '^\[profile\.release\]' Cargo.toml && \
+              perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || \
+              printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
       - uses: houseabsolute/actions-rust-cross@v0
+        name: 编译
         with:
           command: build
           args: --release ${{ github.event.inputs.l != 'false' && '--locked' || '' }} ${{ matrix.t.c }}
           target: ${{ matrix.t.t }}
-
-      - name: 设置可执行文件扩展名
-        if: runner.os == 'Windows'
+      - if: runner.os == 'Windows'
+        name: 设置exe后缀
         shell: bash
         run: echo "EXE=.exe" >> $GITHUB_ENV
-
-      - name: 打包二进制并压缩
+      - name: 打包并生成摘要
         shell: bash
         env:
-          N: ${{ github.event.inputs.n }}
-          UPX: ${{ github.event.inputs.upx }}
-          TGT: ${{ matrix.t.t }}
-          ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          EXE: ${{ env.EXE }}
+          NAMES_INPUT: ${{ github.event.inputs.n }}
+          USE_UPX: ${{ github.event.inputs.upx }}
+          TARGET: ${{ matrix.t.t }}
+          AB: ${{ matrix.s.b }}-${{ matrix.t.t }}
+          IS_HELP_TARGET: ${{ startsWith(matrix.t.t, 'x86_64-unknown-linux') }}
         run: |
-          R="target/${TGT}/release"; BINS=()
-          if [[ -n "$N" ]]; then
-            IFS=',' read -ra L <<< "$N"
-            for n in "${L[@]}"; do
-              n="${n# }"; n="${n% }"
+          RD="target/${TARGET}/release"
+          declare -a BINS=()
+          if [[ -n "$NAMES_INPUT" ]]; then
+            IFS=',' read -ra NL <<< "$NAMES_INPUT"
+            for name in "${NL[@]}"; do
+              name="${name# }"; name="${name% }"
               while IFS= read -r -d '' f; do
-                fname=$(basename "$f")
-                [[ "$fname" == *.* ]] && continue
-                BINS+=("$fname")
-              done < <(find "$R" -maxdepth 1 -name "${n}${EXE}" -type f -print0)
+                fname=$(basename "$f"); [[ "$fname" == *.* ]] && continue; BINS+=("$fname")
+              done < <(find "$RD" -maxdepth 1 -name "${name}${EXE}" -type f -print0 2>/dev/null)
             done
           else
             while IFS= read -r -d '' f; do
-              [[ -x "$f" ]] || continue
-              BINS+=("$(basename "$f")")
-            done < <(find "$R" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z)
+              fname=$(basename "$f"); [[ -x "$f" ]] || continue; BINS+=("$fname")
+            done < <(find "$RD" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 2>/dev/null | sort -z)
           fi
-          if [[ ${#BINS[@]} -eq 0 ]]; then
-            echo "::error::未找到任何二进制文件"
-            exit 1
-          fi
+          [[ ${#BINS[@]} -eq 0 ]] && { echo "::error::未找到任何匹配的二进制文件"; exit 1; }
+          echo "找到二进制: ${BINS[*]}"
 
-          if [[ "$UPX" != "false" ]]; then
-            for b in "${BINS[@]}"; do
-              upx --best --lzma "$R/$b" || echo "::warning::UPX 压缩 $b 失败"
+          if [[ "$USE_UPX" != "false" ]]; then
+            for bin in "${BINS[@]}"; do
+              upx --best --lzma "${RD}/${bin}" && echo "UPX 压缩成功: $bin" || echo "::warning::UPX 压缩失败: $bin"
             done
           fi
 
-          tar -cf - -C "$R" "${BINS[@]}" | xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "${ART}.txz"
+          tar -cf - -C "$RD" "${BINS[@]}" | \
+            xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "${AB}.txz"
 
-      - name: 获取帮助信息（仅首个目标）
-        if: matrix.t.t == matrix.s.f
-        shell: bash
-        env:
-          BIN: ${{ matrix.s.b }}
-          TGT: ${{ matrix.t.t }}
-          EXE: ${{ env.EXE }}
-        run: |
-          BINARY="target/${TGT}/release/${BIN}${EXE}"
-          echo "### ${BIN} 帮助信息" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          "$BINARY" --help >> $GITHUB_STEP_SUMMARY 2>&1 || echo "(无法获取帮助信息)" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          # 压缩包校验
+          PKG_CRC=$(xz --robot --list "${AB}.txz" | awk 'NR==2{print $5}')
+          PKG_S256=$(sha256sum "${AB}.txz" | awk '{print $1}')
+          PKG_S512=$(sha512sum "${AB}.txz" | awk '{print $1}')
+          PKG_SIZE=$(ls -lh "${AB}.txz" | awk '{print $5}')
 
-      - name: 生成校验和
-        shell: bash
-        env:
-          ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          R: target/${{ matrix.t.t }}/release
-          EXE: ${{ env.EXE }}
-          N: ${{ github.event.inputs.n }}
-        run: |
-          BINS=()
-          if [[ -n "$N" ]]; then
-            IFS=',' read -ra L <<< "$N"
-            for n in "${L[@]}"; do
-              n="${n# }"; n="${n% }"
-              while IFS= read -r -d '' f; do
-                fname=$(basename "$f")
-                [[ "$fname" == *.* ]] && continue
-                BINS+=("$fname")
-              done < <(find "$R" -maxdepth 1 -name "${n}${EXE}" -type f -print0)
-            done
-          else
-            while IFS= read -r -d '' f; do
-              [[ -x "$f" ]] || continue
-              BINS+=("$(basename "$f")")
-            done < <(find "$R" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z)
-          fi
-
-          echo "## ${ART}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 文件 | SHA-256 | SHA-512 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|---------|---------|" >> $GITHUB_STEP_SUMMARY
-
-          for b in "${BINS[@]}"; do
-            f="$R/$b"
-            s256=$(sha256sum "$f" | awk '{print $1}')
-            s512=$(sha512sum "$f" | awk '{print $1}')
-            echo "| \`$b\` (二进制) | \`$s256\` | \`$s512\` |" >> $GITHUB_STEP_SUMMARY
+          # 二进制校验
+          declare -a BIN_ROWS=()
+          for bin in "${BINS[@]}"; do
+            B_S256=$(sha256sum "${RD}/${bin}" | awk '{print $1}')
+            B_S512=$(sha512sum "${RD}/${bin}" | awk '{print $1}')
+            B_SIZE=$(ls -lh "${RD}/${bin}" | awk '{print $5}')
+            BIN_ROWS+=("${bin}|${B_SIZE}|${B_S256}|${B_S512}")
           done
 
-          p="${ART}.txz"
-          s256=$(sha256sum "$p" | awk '{print $1}')
-          s512=$(sha512sum "$p" | awk '{print $1}')
-          echo "| \`$p\` (压缩包) | \`$s256\` | \`$s512\` |" >> $GITHUB_STEP_SUMMARY
+          # 写入 Summary
+          {
+            echo "## \`${AB}\`"
+            echo ""
+            echo "### 📦 压缩包: \`${AB}.txz\` (${PKG_SIZE})"
+            echo "| 校验项 | 值 |"
+            echo "|---|---|"
+            echo "| CRC64/XZ | \`${PKG_CRC}\` |"
+            echo "| SHA256 | \`${PKG_S256}\` |"
+            echo "| SHA512 | \`${PKG_S512}\` |"
+            echo ""
+            echo "### 🔧 二进制校验"
+            echo "| 文件 | 大小 | SHA256 | SHA512 |"
+            echo "|---|---|---|---|"
+            for row in "${BIN_ROWS[@]}"; do
+              IFS='|' read -r bname bsize bs256 bs512 <<< "$row"
+              echo "| \`${bname}\` | ${bsize} | \`${bs256}\` | \`${bs512}\` |"
+            done
+          } >> $GITHUB_STEP_SUMMARY
 
-      - uses: actions/upload-artifact@v4
+          # --help 仅在 x86_64-linux 首个目标写一次
+          if [[ "$IS_HELP_TARGET" == "true" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 💡 工具帮助信息" >> $GITHUB_STEP_SUMMARY
+            for bin in "${BINS[@]}"; do
+              HELP=$("${RD}/${bin}" --help 2>&1 || true)
+              {
+                echo "<details><summary><code>${bin} --help</code></summary>"
+                echo ""
+                echo '```'
+                echo "$HELP"
+                echo '```'
+                echo "</details>"
+              } >> $GITHUB_STEP_SUMMARY
+            done
+          fi
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.s.b }}-${{ matrix.t.t }}
           path: ${{ matrix.s.b }}-${{ matrix.t.t }}.txz
