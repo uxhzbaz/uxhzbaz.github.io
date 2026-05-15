@@ -7,15 +7,12 @@ on:
       t:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
-        description: 'cargo build --locked (true/false)'
         default: 'true'
         required: false
       n:
-        description: '指定打包的二进制名称，逗号分隔（留空则自动检测所有二进制）'
         default: ''
         required: false
       upx:
-        description: '使用 UPX 压缩 (true/false)'
         default: 'true'
         required: false
 
@@ -32,26 +29,10 @@ jobs:
           U: ${{ github.event.inputs.u }}
           T: ${{ github.event.inputs.t }}
         run: |
-          sources='['; IFS=','; for u in $U; do
-            u=${u# }; u=${u% }
-            r=${u%%/archive/*}; r=${r##*/}
-            tag=${u##*/archive/refs/tags/}
-            tag=${tag%.tar.gz}; tag=${tag%.tar.xz}; tag=${tag%.zip}; tag=${tag%.tgz}; tag=${tag%.*}
-            b="${r}-${tag}"
-            sources+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"$b\"},"
-          done; sources="${sources%,}]"
-          targets='['; for t in $T; do
-            t=${t# }; t=${t% }
-            case $t in
-              *windows*) o=windows-latest ;;
-              *apple*) o=macos-latest ;;
-              *) o=ubuntu-latest ;;
-            esac
-            c=''; [[ $t == *riscv* ]] && c='--no-default-features'
-            targets+="{\"t\":\"$t\",\"o\":\"$o\",\"c\":\"$c\"},"
-          done; targets="${targets%,}]"
-          echo "s=$sources" >> $GITHUB_OUTPUT
-          echo "t=$targets" >> $GITHUB_OUTPUT
+          s='['; IFS=','; for u in $U; do u=${u# }; u=${u% }; r=${u%%/archive/*}; r=${r##*/}; tag=${u##*/archive/refs/tags/}; tag=${tag%.tar*}; b="${r}-${tag}"; s+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"$b\"},"; done; s="${s%,}]"
+          t='['; for x in $T; do x=${x# }; x=${x% }; o=${x//*windows*/windows-latest}; o=${o//*apple*/macos-latest}; o=${o:=ubuntu-latest}; c=''; [[ $x == *riscv* ]] && c='--no-default-features'; t+="{\"t\":\"$x\",\"o\":\"$o\",\"c\":\"$c\"},"; done; t="${t%,}]"
+          echo "s=$s" >> $GITHUB_OUTPUT
+          echo "t=$t" >> $GITHUB_OUTPUT
 
   b:
     needs: s
@@ -63,122 +44,67 @@ jobs:
         t: ${{ fromJSON(needs.s.outputs.t) }}
     steps:
       - uses: dtolnay/rust-toolchain@stable
-
       - if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl xz-utils p7zip-full
-
+        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl xz-utils
       - if: runner.os == 'Windows'
-        run: choco install upx p7zip
-
+        run: choco install upx
       - if: runner.os == 'macOS'
-        run: brew install upx xz p7zip
-
-      - name: Download and extract source
+        run: brew install upx xz
+      - name: Download source
         shell: bash
         run: |
           curl -sL ${{ matrix.s.u }} | tar -xz --strip-components=1
-          grep -q '^strip *=' Cargo.toml && \
-            perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || \
-            (grep -q '^profile\.release' Cargo.toml && \
-              perl -pi -e 's/^profile\.release.*/$&\nstrip = true/' Cargo.toml || \
-              printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
-
+          grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || (grep -q '^\[profile\.release\]' Cargo.toml && perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
       - uses: houseabsolute/actions-rust-cross@v0
         with:
           command: build
           args: --release ${{ github.event.inputs.l != 'false' && '--locked' || '' }} ${{ matrix.t.c }}
           target: ${{ matrix.t.t }}
-
-      - name: Set exe extension
+      - name: Set exe
         if: runner.os == 'Windows'
         shell: bash
         run: echo "EXE=.exe" >> $GITHUB_ENV
-
-      - name: Package binaries
+      - name: Package
         shell: bash
         env:
-          NAMES_INPUT: ${{ github.event.inputs.n }}
-          USE_UPX: ${{ github.event.inputs.upx }}
-          TARGET: ${{ matrix.t.t }}
-          ARTIFACT_BASE: ${{ matrix.s.b }}-${{ matrix.t.t }}
+          N: ${{ github.event.inputs.n }}
+          U: ${{ github.event.inputs.upx }}
+          TGT: ${{ matrix.t.t }}
+          ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
           EXE: ${{ env.EXE }}
         run: |
-          RELEASE_DIR="target/${TARGET}/release"
-          declare -a BINS=()
-
-          if [[ -n "$NAMES_INPUT" ]]; then
-            IFS=',' read -ra NAME_LIST <<< "$NAMES_INPUT"
-            for name in "${NAME_LIST[@]}"; do
-              name="${name# }"; name="${name% }"
-              while IFS= read -r -d '' f; do
-                fname=$(basename "$f")
-                [[ "$fname" == *.* ]] && continue
-                BINS+=("$fname")
-              done < <(find "$RELEASE_DIR" -maxdepth 1 -name "${name}${EXE}" -type f -print0 2>/dev/null)
-            done
-          else
-            while IFS= read -r -d '' f; do
-              [[ -x "$f" ]] || continue
-              BINS+=("$(basename "$f")")
-            done < <(find "$RELEASE_DIR" -maxdepth 1 -type f -o -type l \
-              -name "*${EXE}" -o ! -name "*.*" -print0 2>/dev/null | sort -z)
-          fi
-
-          if [[ ${#BINS[@]} -eq 0 ]]; then
-            echo "::error::未找到任何匹配的二进制文件，请检查 n 参数或构建产物"
-            exit 1
-          fi
-
-          echo "找到以下二进制文件: ${BINS[*]}"
-
-          if [[ "$USE_UPX" != "false" ]]; then
-            for bin in "${BINS[@]}"; do
-              echo "UPX 压缩: $bin"
-              upx --best --lzma "${RELEASE_DIR}/${bin}" || echo "::warning::UPX 压缩 $bin 失败，跳过"
-            done
-          fi
-
-          echo "打包文件到 ${ARTIFACT_BASE}.txz ..."
-          tar -cf - -C "$RELEASE_DIR" "${BINS[@]}" | \
-            xz -9evvM55% -T1 --block-size=256M \
-               --lzma2=preset=9e,dict=32M,depth=1000 \
-            > "${ARTIFACT_BASE}.txz"
-          echo "打包完成: ${ARTIFACT_BASE}.txz"
-          ls -lh "${ARTIFACT_BASE}.txz"
-
-      - name: Generate checksums and summary table
+          D="target/${TGT}/release"
+          declare -a B=()
+          if [[ -n "$N" ]]; then IFS=',' read -ra L <<< "$N"; for n in "${L[@]}"; do n=${n# }; n=${n% }; while IFS= read -r -d '' f; do f=$(basename "$f"); [[ "$f" == *.* ]] && continue; B+=("$f"); done < <(find "$D" -maxdepth 1 -name "${n}${EXE}" -type f -print0); done
+          else while IFS= read -r -d '' f; do [[ -x "$f" ]] || continue; B+=("$(basename "$f")"); done < <(find "$D" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z); fi
+          [[ ${#B[@]} -eq 0 ]] && echo "::error::无二进制" && exit 1
+          [[ "$U" != "false" ]] && for f in "${B[@]}"; do upx --best --lzma "$D/$f" || echo "::warning::UPX $f 失败"; done
+          tar -cf - -C "$D" "${B[@]}" | xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "${ART}.txz"
+      - name: Checksums
         shell: bash
         env:
-          TARGET: ${{ matrix.t.t }}
-          ARTIFACT_BASE: ${{ matrix.s.b }}-${{ matrix.t.t }}
+          TGT: ${{ matrix.t.t }}
+          ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
           EXE: ${{ env.EXE }}
-          NAMES_INPUT: ${{ github.event.inputs.n }}
+          N: ${{ github.event.inputs.n }}
         run: |
-          RELEASE_DIR="target/${TARGET}/release"
-          TXZ="${ARTIFACT_BASE}.txz"
-
-          crc64() { 7z h -scrcCRC64 "$1" | awk '/CRC64/{print $2}'; }
-          sha256() { sha256sum "$1" | awk '{print $1}'; }
-
-          declare -a BINS=()
-          if [[ -n "$NAMES_INPUT" ]]; then
-            IFS=',' read -ra NAME_LIST <<< "$NAMES_INPUT"
-            for name in "${NAME_LIST[@]}"; do
-              name="${name# }"; name="${name% }"
-              while IFS= read -r -d '' f; do
-                fname=$(basename "$f")
-                [[ "$fname" == *.* ]] && continue
-                BINS+=("$fname")
-              done < <(find "$RELEASE_DIR" -maxdepth 1 -name "${name}${EXE}" -type f -print0 2>/dev/null)
-            done
-          else
-            while IFS= read -r -d '' f; do
-              [[ -x "$f" ]] || continue
-              BINS+=("$(basename "$f")")
-            done < <(find "$RELEASE_DIR" -maxdepth 1 -type f -o -type l \
-              -name "*${EXE}" -o ! -name "*.*" -print0 2>/dev/null | sort -z)
-          fi
-
-          {
-            echo "## ${ARTIFACT_BASE}"
-            echo ""
+          D="target/${TGT}/release"
+          TXZ="${ART}.txz"
+          crc64(){ python3 - "$1"<<'E' 
+import sys,struct;POLY=0xad93d23594c935a9;T=[];[(T.append(((i>>1)^(POLY if i&1 else 0)) for _ in range(8))) for i in range(256)];c=0xffffffffffffffff
+with open(sys.argv[1],"rb") as f:
+ for b in f.read():
+  c=(c>>8)^T[(c^b)&0xff]
+print(format(c^0xffffffffffffffff,'016x'))
+E
+}
+          sha256(){ sha256sum "$1"|awk '{print $1}'; }
+          sha512(){ sha512sum "$1"|awk '{print $1}'; }
+          declare -a B=()
+          if [[ -n "$N" ]]; then IFS=',' read -ra L <<< "$N"; for n in "${L[@]}"; do n=${n# }; n=${n% }; while IFS= read -r -d '' f; do f=$(basename "$f"); [[ "$f" == *.* ]] && continue; B+=("$f"); done < <(find "$D" -maxdepth 1 -name "${n}${EXE}" -type f -print0); done
+          else while IFS= read -r -d '' f; do [[ -x "$f" ]] || continue; B+=("$(basename "$f")"); done < <(find "$D" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z); fi
+          { echo "| ${ART} |"; echo "|----|"; for f in "${B[@]}"; do echo "| CRC64/XZ: $(crc64 "$D/$f") |"; echo "| SHA256: $(sha256 "$D/$f") |"; echo "| SHA512: $(sha512 "$D/$f") |"; done; echo "| CRC64/XZ: $(crc64 "$TXZ") |"; echo "| SHA256: $(sha256 "$TXZ") |"; echo "| SHA512: $(sha512 "$TXZ") |"; } >> $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.s.b }}-${{ matrix.t.t }}
+          path: ${{ matrix.s.b }}-${{ matrix.t.t }}.txz
