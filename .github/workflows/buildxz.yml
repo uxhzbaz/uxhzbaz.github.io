@@ -60,16 +60,12 @@ jobs:
       - name: Build xz
         env:
           TARGET: ${{ matrix.target }}
-          ZIG_VERSION: ${{ inputs.zig_version }}
         run: |
           set -e
-          cd "$GITHUB_WORKSPACE"
-          # Download and extract source
-          curl -sL "${{ inputs.source_url }}" | tar -xJ --strip-components=1
-          # Configure for cross musl
-          BUILD=$(gcc -dumpmachine)  # e.g. x86_64-linux-gnu
-          CC="zig cc -target ${TARGET}" \
-          CFLAGS="-O2 -fno-pie" \
+          curl -sL "${{ inputs.source_url }}" | tar -x --strip-components=1
+          BUILD=$(gcc -dumpmachine)
+          CC="zig cc" \
+          CFLAGS="-target ${TARGET} -O2 -fno-pie" \
           LDFLAGS="-static -no-pie" \
           ./configure \
             --build="${BUILD}" \
@@ -82,11 +78,9 @@ jobs:
             --disable-xzdec \
             --disable-lzmadec \
             --disable-lzmainfo \
-            --disable-lzma-links \
-            --without-lzma-wrapper
+            --disable-lzma-links
           make -j$(nproc)
           strip src/xz/xz
-          # Package
           STAGE="xz-${TARGET}"
           mkdir -p "${STAGE}"
           cp src/xz/xz "${STAGE}/"
