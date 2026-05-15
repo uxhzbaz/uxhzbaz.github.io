@@ -1,4 +1,4 @@
-name: B (XZ Utils static)
+name: build XZ Utils
 run-name: ${{ github.event.inputs.run_name || github.actor }}
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ on:
         default: 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi'
       configure_args:
         description: '额外的 ./configure 参数'
-        default: '--disable-shared --enable-static --disable-nls'
+        default: '--disable-shared --enable-static'
         required: false
 
 env:
@@ -75,6 +75,12 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
     steps:
+      - name: 安装构建依赖
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: gettext
+          version: 1.0
+
       - name: 缓存工具链
         id: cache-tc
         uses: actions/cache@v4
@@ -109,6 +115,9 @@ jobs:
           export STRIP="${TC}-strip"
           export CFLAGS="-Os"
           export PKG_CONFIG="false"
+          export MSGFMT="$(which msgfmt)"
+          export MSGMERGE="$(which msgmerge)"
+          export XGETTEXT="$(which xgettext)"
           cd src
           LDFLAGS="-static" ./configure \
             --host="${TC}" \
@@ -126,22 +135,22 @@ jobs:
           STRIP_BIN="${{ github.workspace }}/toolchain/bin/${TC}-strip"
           mkdir -p dist
 
-          # ELF 可执行二进制 -> 只用工具本身名字
+          # ELF 可执行二进制
           while IFS= read -r -d '' f; do
-            file "$f" | grep -qE 'ELF.*(executable)' || continue
+            file "$f" | grep -qE 'ELF.*executable' || continue
             fname=$(basename "$f")
             "$STRIP_BIN" "$f" 2>/dev/null || true
             cp "$f" "dist/${fname}"
           done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
 
-          # shell 脚本（xzgrep、xzdiff 等）
+          # shell 脚本
           while IFS= read -r -d '' f; do
             file "$f" | grep -qiE 'shell script|text' || continue
             fname=$(basename "$f")
             cp "$f" "dist/${fname}"
           done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
 
-          # .mo 本地化文件，保留相对路径 locale/xx/LC_MESSAGES/xz.mo
+          # .mo 本地化文件，保留 locale/xx/LC_MESSAGES/ 结构
           find "${INST}" -name '*.mo' | while read -r f; do
             rel="${f#${INST}/}"
             mkdir -p "dist/$(dirname "$rel")"
@@ -208,7 +217,7 @@ jobs:
         run: |
           TARGET="${{ matrix.t }}"
           tar -cJf "${TARGET}.tar.xz" -C dist .
-          echo "打包完成: ${TARGET}.tar.xz ($(ls -lh "${TARGET}.tar.xz" | awk '{print $5}'))"
+          echo "打包: ${TARGET}.tar.xz ($(ls -lh "${TARGET}.tar.xz" | awk '{print $5}'))"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
