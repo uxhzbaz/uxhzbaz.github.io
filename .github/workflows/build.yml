@@ -71,7 +71,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - if: runner.os == 'Linux'
         name: 安装依赖
-        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl
+        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl libelf-dev zlib1g-dev
       - if: runner.os == 'Windows'
         name: 安装依赖
         run: choco install upx
