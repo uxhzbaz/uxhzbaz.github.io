@@ -85,7 +85,7 @@ jobs:
         shell: bash
         env:
           ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          R="target/${{ matrix.t.t }}/release"
+          R: target/${{ matrix.t.t }}/release
           EXE: ${{ env.EXE }}
           N: ${{ github.event.inputs.n }}
         run: |
