@@ -15,7 +15,7 @@ on:
         default: 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi'
       configure_args:
         description: '额外的 ./configure 参数'
-        default: '--disable-shared --enable-static --disable-nls'
+        default: '--disable-shared --enable-static --disable-nls --disable-xzdec --disable-lzmadec --disable-lzmainfo --disable-lzma-links --disable-scripts --disable-doc'
         required: false
       binary_names:
         description: '要收集的二进制名称，逗号分隔（留空自动检测）'
@@ -23,8 +23,8 @@ on:
         required: false
 
 env:
-  TOOLCHAIN_TAG: '20250929'
-  TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20250929'
+  TOOLCHAIN_TAG: '20260430'
+  TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20260430'
 
 jobs:
   s:
@@ -38,25 +38,23 @@ jobs:
         shell: bash
         env:
           TARGETS: ${{ github.event.inputs.targets }}
-          TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20250929'
+          TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20260430'
         run: |
           include='[]'
           first_key=''
           IFS=',' read -ra TS <<< "$TARGETS"
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
-            # 用户输入的短三元组 -> 工具链完整三元组
             case "$t" in
-              x86_64-linux-musl)    tc_triple="x86_64-unknown-linux-musl"   ;;
-              aarch64-linux-musl)   tc_triple="aarch64-unknown-linux-musl"  ;;
-              i686-linux-musl)      tc_triple="i686-unknown-linux-musl"     ;;
-              arm-linux-musleabi)   tc_triple="arm-unknown-linux-musleabi"  ;;
-              armv7-linux-musleabi) tc_triple="armv7-unknown-linux-musleabi" ;;
-              # 也接受完整三元组直接输入
-              x86_64-unknown-linux-musl)    tc_triple="x86_64-unknown-linux-musl"   ;;
-              aarch64-unknown-linux-musl)   tc_triple="aarch64-unknown-linux-musl"  ;;
-              i686-unknown-linux-musl)      tc_triple="i686-unknown-linux-musl"     ;;
-              arm-unknown-linux-musleabi)   tc_triple="arm-unknown-linux-musleabi"  ;;
+              x86_64-linux-musl)           tc_triple="x86_64-unknown-linux-musl"    ;;
+              aarch64-linux-musl)          tc_triple="aarch64-unknown-linux-musl"   ;;
+              i686-linux-musl)             tc_triple="i686-unknown-linux-musl"      ;;
+              arm-linux-musleabi)          tc_triple="arm-unknown-linux-musleabi"   ;;
+              armv7-linux-musleabi)        tc_triple="armv7-unknown-linux-musleabi" ;;
+              x86_64-unknown-linux-musl)   tc_triple="x86_64-unknown-linux-musl"   ;;
+              aarch64-unknown-linux-musl)  tc_triple="aarch64-unknown-linux-musl"  ;;
+              i686-unknown-linux-musl)     tc_triple="i686-unknown-linux-musl"     ;;
+              arm-unknown-linux-musleabi)  tc_triple="arm-unknown-linux-musleabi"  ;;
               armv7-unknown-linux-musleabi) tc_triple="armv7-unknown-linux-musleabi" ;;
               *)
                 echo "::warning::未知目标 $t，跳过"
@@ -112,12 +110,16 @@ jobs:
           export AR="${TC}-ar"
           export RANLIB="${TC}-ranlib"
           export STRIP="${TC}-strip"
+          # -static 放 CFLAGS 和 LDFLAGS 双保险
+          # PKG_CONFIG 设为不存在，避免 configure 检测到系统动态库
           export CFLAGS="-static -Os"
           export LDFLAGS="-static"
+          export PKG_CONFIG="false"
           cd src
           ./configure \
             --host="${TC}" \
             --prefix=/usr \
+            --disable-dependency-tracking \
             ${{ github.event.inputs.configure_args }}
           make -j$(nproc)
 
