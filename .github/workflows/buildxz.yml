@@ -62,7 +62,11 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -e
-          curl -sL "${{ inputs.source_url }}" | tar -x --auto-compress --strip-components=1
+          URL="${{ inputs.source_url }}"
+          EXT="${URL##*.}"
+          if [ "$EXT" = "gz" ]; then TAR_FLAG="z"; else TAR_FLAG="J"; fi
+          curl -sL "$URL" -o /tmp/src.tar.${EXT}
+          tar -x${TAR_FLAG}f /tmp/src.tar.${EXT} --strip-components=1
           BUILD=$(gcc -dumpmachine)
           CC="zig cc" \
           CFLAGS="-target ${TARGET} -O2 -fno-pie" \
