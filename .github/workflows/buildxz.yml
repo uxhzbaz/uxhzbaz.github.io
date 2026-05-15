@@ -1,4 +1,4 @@
-name: Build xz (Alpine native, musl static)
+name: Build xz
 
 on:
   workflow_dispatch:
@@ -26,7 +26,6 @@ jobs:
           json='['
           IFS=','; for t in $T; do
             t=${t# }; t=${t% }
-            # map target triple to Docker platform and Alpine image
             case "$t" in
               x86_64-linux-musl)        platform="linux/amd64";   image="amd64/alpine:edge" ;;
               aarch64-linux-musl)       platform="linux/arm64";   image="arm64v8/alpine:edge" ;;
@@ -60,24 +59,25 @@ jobs:
           SOURCE_URL: ${{ inputs.source_url }}
         run: |
           docker run --rm --platform "${PLATFORM}" \
+            -e TARGET="${TARGET}" \
             -v "$PWD":/work -w /work \
-            "${IMAGE}" sh -c '
+            "${IMAGE}" sh -c "
               set -e
               apk add --no-cache curl tar xz build-base
 
               # download and extract source
-              URL="${{ inputs.source_url }}"
-              EXT="${URL##*.}"
-              curl -sL "$URL" -o /tmp/src.tar.${EXT}
-              case "${EXT}" in
-                gz) tar -xzf /tmp/src.tar.${EXT} ;;
-                xz) tar -xJf /tmp/src.tar.${EXT} ;;
-                *)  tar -xf /tmp/src.tar.${EXT} ;;
+              URL='${SOURCE_URL}'
+              EXT=\"\${URL##*.}\"
+              curl -sL \"\$URL\" -o /tmp/src.tar.\${EXT}
+              case \"\${EXT}\" in
+                gz) tar -xzf /tmp/src.tar.\${EXT} ;;
+                xz) tar -xJf /tmp/src.tar.\${EXT} ;;
+                *)  tar -xf /tmp/src.tar.\${EXT} ;;
               esac
               cd xz-*
 
               # configure & compile (static musl, matching Alpine APKBUILD)
-              CFLAGS="-O2" \
+              CFLAGS='-O2' \
               ./configure \
                 --disable-nls \
                 --disable-shared \
@@ -92,18 +92,18 @@ jobs:
                 --disable-werror \
                 --disable-doc
 
-              make -j$(nproc)
+              make -j\$(nproc)
               strip src/xz/xz
 
               # package
-              STAGE="xz-${TARGET}"
-              mkdir -p /work/"${STAGE}"
-              cp src/xz/xz /work/"${STAGE}/"
+              STAGE=\"xz-\${TARGET}\"
+              mkdir -p /work/\"\${STAGE}\"
+              cp src/xz/xz /work/\"\${STAGE}\"/
               cd /work
-              tar -cJf "${STAGE}.tar.xz" "${STAGE}"
-              sha256sum "${STAGE}.tar.xz" > "${STAGE}.tar.xz.SHA256"
-              echo "Built ${STAGE}.tar.xz"
-            '
+              tar -cJf \"\${STAGE}.tar.xz\" \"\${STAGE}\"
+              sha256sum \"\${STAGE}.tar.xz\" > \"\${STAGE}.tar.xz.SHA256\"
+              echo \"Built \${STAGE}.tar.xz\"
+            "
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
