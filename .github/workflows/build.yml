@@ -69,15 +69,34 @@ jobs:
         t: ${{ fromJSON(needs.s.outputs.t) }}
     steps:
       - uses: dtolnay/rust-toolchain@stable
+
       - if: runner.os == 'Linux'
         name: 安装依赖
-        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl libelf-dev zlib1g-dev
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: musl-tools upx-ucl libelf-dev zlib1g-dev
+          version: 1.0
+
       - if: runner.os == 'Windows'
         name: 安装依赖
         run: choco install upx
+
       - if: runner.os == 'macOS'
         name: 安装依赖
         run: brew install upx
+
+      - name: 缓存 Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ matrix.t.t }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.t.t }}-cargo-
+
       - name: 下载并解压源码
         shell: bash
         run: |
@@ -86,16 +105,19 @@ jobs:
             (grep -q '^\[profile\.release\]' Cargo.toml && \
               perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || \
               printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
+
       - uses: houseabsolute/actions-rust-cross@v0
         name: 编译
         with:
           command: build
           args: --release ${{ github.event.inputs.l != 'false' && '--locked' || '' }} ${{ matrix.t.c }}
           target: ${{ matrix.t.t }}
+
       - if: runner.os == 'Windows'
         name: 设置exe后缀
         shell: bash
         run: echo "EXE=.exe" >> $GITHUB_ENV
+
       - name: 打包并生成摘要
         shell: bash
         env:
@@ -129,7 +151,6 @@ jobs:
             done
           fi
 
-          # 二进制校验
           declare -a BIN_ROWS=()
           for bin in "${BINS[@]}"; do
             B_S256=$(sha256sum "${RD}/${bin}" | awk '{print $1}')
@@ -138,7 +159,6 @@ jobs:
             BIN_ROWS+=("${bin}|${B_SIZE}|${B_S256}|${B_S512}")
           done
 
-          # 写入 Summary
           {
             echo "## \`${AB}\`"
             echo ""
@@ -151,7 +171,6 @@ jobs:
             done
           } >> $GITHUB_STEP_SUMMARY
 
-          # --help 仅在第一个三元组写一次
           if [[ "$IS_FIRST_TARGET" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 💡 工具帮助信息" >> $GITHUB_STEP_SUMMARY
