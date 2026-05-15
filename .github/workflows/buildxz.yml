@@ -62,7 +62,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -e
-          curl -sL "${{ inputs.source_url }}" | tar -x --strip-components=1
+          curl -sL "${{ inputs.source_url }}" | tar -x --auto-compress --strip-components=1
           BUILD=$(gcc -dumpmachine)
           CC="zig cc" \
           CFLAGS="-target ${TARGET} -O2 -fno-pie" \
@@ -86,15 +86,6 @@ jobs:
           cp src/xz/xz "${STAGE}/"
           tar -cJf "${STAGE}.tar.xz" "${STAGE}"
           sha256sum "${STAGE}.tar.xz" | tee "${STAGE}.tar.xz.SHA256"
-          echo "Built: ${STAGE}.tar.xz"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: xz-${{ matrix.target }}
-          path: |
-            xz-${{ matrix.target }}.tar.xz
-            xz-${{ matrix.target }}.tar.xz.SHA256
 
   release:
     needs: build
