@@ -2,6 +2,9 @@ name: B
 on:
   workflow_dispatch:
     inputs:
+      run_name:
+        description: '自定义此次工作流显示名称'
+        default: '${{ github.actor }}'
       u:
         default: 'https://github.com/svenstaro/miniserve/archive/refs/tags/v0.35.0.tar.gz,https://github.com/magic-wormhole/magic-wormhole.rs/archive/refs/tags/0.8.1.tar.gz'
       t:
@@ -29,14 +32,14 @@ jobs:
           U: ${{ github.event.inputs.u }}
           T: ${{ github.event.inputs.t }}
         run: |
-          s='['; IFS=','; for u in $U; do u=${u# }; u=${u% }; r=${u%%/archive/*}; r=${r##*/}; tag=${u##*/archive/refs/tags/}; tag=${tag%.tar*}; b="${r}-${tag}"; s+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"$b\"},"; done; s="${s%,}]"
-          t='['; for x in $T; do x=${x# }; x=${x% }; o=${x//*windows*/windows-latest}; o=${o//*apple*/macos-latest}; o=${o:=ubuntu-latest}; c=''; [[ $x == *riscv* ]] && c='--no-default-features'; t+="{\"t\":\"$x\",\"o\":\"$o\",\"c\":\"$c\"},"; done; t="${t%,}]"
+          s='['; IFS=','; for u in $U; do u=${u# }; u=${u% }; r=${u%%/archive/*}; r=${r##*/}; tag=${u##*/archive/refs/tags/}; tag=${tag%.tar.*}; b="${r}-${tag}"; s+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"$b\"},"; done; s="${s%,}]"
+          tarr='['; for t in $T; do t=${t# }; t=${t% }; case $t in *windows*) o=windows-latest ;; *apple*) o=macos-latest ;; *) o=ubuntu-latest ;; esac; c=''; [[ $t == *riscv* ]] && c='--no-default-features'; tarr+="{\"t\":\"$t\",\"o\":\"$o\",\"c\":\"$c\"},"; done; tarr="${tarr%,}]"
           echo "s=$s" >> $GITHUB_OUTPUT
-          echo "t=$t" >> $GITHUB_OUTPUT
+          echo "t=$tarr" >> $GITHUB_OUTPUT
 
   b:
     needs: s
-    name: ${{ matrix.s.b }}-${{ matrix.t.t }}
+    name: ${{ github.event.inputs.run_name }} ${{ matrix.s.b }}-${{ matrix.t.t }}
     runs-on: ${{ matrix.t.o }}
     strategy:
       matrix:
@@ -50,7 +53,7 @@ jobs:
         run: choco install upx
       - if: runner.os == 'macOS'
         run: brew install upx xz
-      - name: Download source
+      - name: Download and extract
         shell: bash
         run: |
           curl -sL ${{ matrix.s.u }} | tar -xz --strip-components=1
@@ -68,42 +71,43 @@ jobs:
         shell: bash
         env:
           N: ${{ github.event.inputs.n }}
-          U: ${{ github.event.inputs.upx }}
+          UPX: ${{ github.event.inputs.upx }}
           TGT: ${{ matrix.t.t }}
           ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
           EXE: ${{ env.EXE }}
         run: |
-          D="target/${TGT}/release"
-          declare -a B=()
-          if [[ -n "$N" ]]; then IFS=',' read -ra L <<< "$N"; for n in "${L[@]}"; do n=${n# }; n=${n% }; while IFS= read -r -d '' f; do f=$(basename "$f"); [[ "$f" == *.* ]] && continue; B+=("$f"); done < <(find "$D" -maxdepth 1 -name "${n}${EXE}" -type f -print0); done
-          else while IFS= read -r -d '' f; do [[ -x "$f" ]] || continue; B+=("$(basename "$f")"); done < <(find "$D" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z); fi
-          [[ ${#B[@]} -eq 0 ]] && echo "::error::无二进制" && exit 1
-          [[ "$U" != "false" ]] && for f in "${B[@]}"; do upx --best --lzma "$D/$f" || echo "::warning::UPX $f 失败"; done
-          tar -cf - -C "$D" "${B[@]}" | xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "${ART}.txz"
+          R="target/${TGT}/release"; BINS=()
+          if [[ -n "$N" ]]; then IFS=',' read -ra L <<< "$N"; for n in "${L[@]}"; do n="${n# }"; n="${n% }"; while IFS= read -r -d '' f; do f=$(basename "$f"); [[ "$f" == *.* ]] && continue; BINS+=("$f"); done < <(find "$R" -maxdepth 1 -name "${n}${EXE}" -type f -print0); done; else while IFS= read -r -d '' f; do [[ -x "$f" ]] || continue; BINS+=("$(basename "$f")"); done < <(find "$R" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z); fi
+          [[ ${#BINS[@]} -eq 0 ]] && echo "::error::未找到二进制" && exit 1
+          [[ "$UPX" != "false" ]] && for b in "${BINS[@]}"; do upx --best --lzma "$R/$b" || echo "::warning::$b UPX失败"; done
+          tar -cf - -C "$R" "${BINS[@]}" | xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "${ART}.txz"
       - name: Checksums
         shell: bash
         env:
-          TGT: ${{ matrix.t.t }}
           ART: ${{ matrix.s.b }}-${{ matrix.t.t }}
+          R="target/${{ matrix.t.t }}/release"
           EXE: ${{ env.EXE }}
           N: ${{ github.event.inputs.n }}
         run: |
-          D="target/${TGT}/release"
-          TXZ="${ART}.txz"
-          crc64(){ python3 - "$1"<<'E' 
-import sys,struct;POLY=0xad93d23594c935a9;T=[];[(T.append(((i>>1)^(POLY if i&1 else 0)) for _ in range(8))) for i in range(256)];c=0xffffffffffffffff
-with open(sys.argv[1],"rb") as f:
- for b in f.read():
-  c=(c>>8)^T[(c^b)&0xff]
-print(format(c^0xffffffffffffffff,'016x'))
-E
-}
+          crc64(){ python3 - "$1" <<'EOF'
+import sys
+POLY=0xad93d23594c935a9
+tbl=[]
+for i in range(256):
+ c=i
+ for _ in range(8): c=(c>>1)^(POLY if c&1 else 0)
+ tbl.append(c)
+ crc=0xffffffffffffffff
+with open(sys.argv[1],'rb') as f:
+ for ch in iter(lambda:f.read(65536),b''):
+  for b in ch: crc=(crc>>8)^tbl[(crc^b)&0xff]
+print(format(crc^0xffffffffffffffff,'016x'))
+EOF
+          }
           sha256(){ sha256sum "$1"|awk '{print $1}'; }
           sha512(){ sha512sum "$1"|awk '{print $1}'; }
-          declare -a B=()
-          if [[ -n "$N" ]]; then IFS=',' read -ra L <<< "$N"; for n in "${L[@]}"; do n=${n# }; n=${n% }; while IFS= read -r -d '' f; do f=$(basename "$f"); [[ "$f" == *.* ]] && continue; B+=("$f"); done < <(find "$D" -maxdepth 1 -name "${n}${EXE}" -type f -print0); done
-          else while IFS= read -r -d '' f; do [[ -x "$f" ]] || continue; B+=("$(basename "$f")"); done < <(find "$D" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z); fi
-          { echo "| ${ART} |"; echo "|----|"; for f in "${B[@]}"; do echo "| CRC64/XZ: $(crc64 "$D/$f") |"; echo "| SHA256: $(sha256 "$D/$f") |"; echo "| SHA512: $(sha512 "$D/$f") |"; done; echo "| CRC64/XZ: $(crc64 "$TXZ") |"; echo "| SHA256: $(sha256 "$TXZ") |"; echo "| SHA512: $(sha512 "$TXZ") |"; } >> $GITHUB_STEP_SUMMARY
+          BINS=(); if [[ -n "$N" ]]; then IFS=',' read -ra L <<< "$N"; for n in "${L[@]}"; do n="${n# }"; n="${n% }"; while IFS= read -r -d '' f; do [[ "$f" == *.* ]] && continue; BINS+=("$(basename "$f")"); done < <(find "$R" -maxdepth 1 -name "${n}${EXE}" -type f -print0); done; else while IFS= read -r -d '' f; do [[ -x "$f" ]] || continue; BINS+=("$(basename "$f")"); done < <(find "$R" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 | sort -z); fi
+          { echo "| 工具-版本-三元组 |"; echo "|----|"; for b in "${BINS[@]}"; do f="$R/$b"; echo "| CRC64/XZ |"; echo "| $(crc64 "$f") |"; echo "| SHA256 |"; echo "| $(sha256 "$f") |"; echo "| SHA512 |"; echo "| $(sha512 "$f") |"; done; echo "| ${ART}.txz |"; echo "| $(crc64 "${ART}.txz") |"; echo "| $(sha256 "${ART}.txz") |"; echo "| $(sha512 "${ART}.txz") |"; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.s.b }}-${{ matrix.t.t }}
