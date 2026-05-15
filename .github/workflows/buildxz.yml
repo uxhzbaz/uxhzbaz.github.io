@@ -76,8 +76,9 @@ jobs:
               esac
               cd xz-*
 
-              # configure & compile (static musl, matching Alpine APKBUILD)
+              # configure & compile (static musl)
               CFLAGS='-O2' \
+              LDFLAGS='-static' \
               ./configure \
                 --disable-nls \
                 --disable-shared \
