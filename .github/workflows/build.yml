@@ -33,6 +33,7 @@ jobs:
     outputs:
       s: ${{ steps.p.outputs.s }}
       t: ${{ steps.p.outputs.t }}
+      first_target: ${{ steps.p.outputs.first_target }}
     steps:
       - id: p
         shell: bash
@@ -47,14 +48,16 @@ jobs:
             tag=${tag%.tar.gz}; tag=${tag%.tar.xz}; tag=${tag%.zip}; tag=${tag%.tgz}; tag=${tag%.*}
             sources+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"${r}-${tag}\"},"
           done; sources="${sources%,}]"
-          targets='['; for t in $T; do
+          targets='['; first=''; for t in $T; do
             t=${t# }; t=${t% }
             case $t in *windows*) o=windows-latest;; *apple*) o=macos-latest;; *) o=ubuntu-latest;; esac
             c=''; [[ $t == *riscv* ]] && c='--no-default-features'
             targets+="{\"t\":\"$t\",\"o\":\"$o\",\"c\":\"$c\"},"
+            [[ -z "$first" ]] && first="$t"
           done; targets="${targets%,}]"
           echo "s=$sources" >> $GITHUB_OUTPUT
           echo "t=$targets" >> $GITHUB_OUTPUT
+          echo "first_target=$first" >> $GITHUB_OUTPUT
 
   b:
     needs: s
@@ -68,13 +71,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - if: runner.os == 'Linux'
         name: 安装依赖
-        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl xz-utils
+        run: sudo apt-get update -y && sudo apt-get install -y musl-tools upx-ucl
       - if: runner.os == 'Windows'
         name: 安装依赖
         run: choco install upx
       - if: runner.os == 'macOS'
         name: 安装依赖
-        run: brew install upx xz
+        run: brew install upx
       - name: 下载并解压源码
         shell: bash
         run: |
@@ -100,7 +103,7 @@ jobs:
           USE_UPX: ${{ github.event.inputs.upx }}
           TARGET: ${{ matrix.t.t }}
           AB: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          IS_HELP_TARGET: ${{ startsWith(matrix.t.t, 'x86_64-unknown-linux') }}
+          IS_FIRST_TARGET: ${{ matrix.t.t == needs.s.outputs.first_target }}
         run: |
           RD="target/${TARGET}/release"
           declare -a BINS=()
@@ -126,15 +129,6 @@ jobs:
             done
           fi
 
-          tar -cf - -C "$RD" "${BINS[@]}" | \
-            xz -9evvM55% -T1 --block-size=256M --lzma2=preset=9e,dict=32M,depth=1000 > "${AB}.txz"
-
-          # 压缩包校验
-          PKG_CRC=$(xz --robot --list "${AB}.txz" | awk 'NR==2{print $5}')
-          PKG_S256=$(sha256sum "${AB}.txz" | awk '{print $1}')
-          PKG_S512=$(sha512sum "${AB}.txz" | awk '{print $1}')
-          PKG_SIZE=$(ls -lh "${AB}.txz" | awk '{print $5}')
-
           # 二进制校验
           declare -a BIN_ROWS=()
           for bin in "${BINS[@]}"; do
@@ -148,14 +142,7 @@ jobs:
           {
             echo "## \`${AB}\`"
             echo ""
-            echo "### 📦 压缩包: \`${AB}.txz\` (${PKG_SIZE})"
-            echo "| 校验项 | 值 |"
-            echo "|---|---|"
-            echo "| CRC64/XZ | \`${PKG_CRC}\` |"
-            echo "| SHA256 | \`${PKG_S256}\` |"
-            echo "| SHA512 | \`${PKG_S512}\` |"
-            echo ""
-            echo "### 🔧 二进制校验"
+            echo "### 🔧 二进制可执行文件校验"
             echo "| 文件 | 大小 | SHA256 | SHA512 |"
             echo "|---|---|---|---|"
             for row in "${BIN_ROWS[@]}"; do
@@ -164,8 +151,8 @@ jobs:
             done
           } >> $GITHUB_STEP_SUMMARY
 
-          # --help 仅在 x86_64-linux 首个目标写一次
-          if [[ "$IS_HELP_TARGET" == "true" ]]; then
+          # --help 仅在第一个三元组写一次
+          if [[ "$IS_FIRST_TARGET" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 💡 工具帮助信息" >> $GITHUB_STEP_SUMMARY
             for bin in "${BINS[@]}"; do
@@ -185,4 +172,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          path: ${{ matrix.s.b }}-${{ matrix.t.t }}.txz
+          path: target/${{ matrix.t.t }}/release/
