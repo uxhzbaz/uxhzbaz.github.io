@@ -8,10 +8,10 @@ on:
         default: 'https://raw.githubusercontent.com/uxhzbaz/uxhzbaz.github.io/refs/heads/main/xz-5.8.3-zh_CN.tar.xz'
       targets:
         description: 'Comma-separated target triples'
-        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
+        default: 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi'
       zig_version:
-        description: 'Zig version'
-        default: '0.16.0'
+        description: 'Zig version (used for non-x86_64 musl targets)'
+        default: '0.15.1'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -45,9 +45,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install host deps
-        run: sudo apt-get update -y && sudo apt-get install -y xz-utils curl tar
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xz-utils curl tar musl-tools
 
-      - name: Install Zig
+      - name: Install Zig (for non-x86_64 targets)
+        if: matrix.target != 'x86_64-linux-musl'
         run: |
           ZV="${{ inputs.zig_version }}"
           ZP="zig-$(uname -m)-linux-${ZV}.tar.xz"
@@ -55,25 +58,42 @@ jobs:
           mkdir -p ~/zig && tar -C ~/zig -xJf /tmp/z.tar.xz
           ZD=$(tar -tf /tmp/z.tar.xz | head -1 | cut -d/ -f1)
           echo "$HOME/zig/${ZD}" >> $GITHUB_PATH
-          $HOME/zig/${ZD}/zig version
 
       - name: Build xz
         env:
           TARGET: ${{ matrix.target }}
         run: |
           set -e
+          # Download & extract source
           URL="${{ inputs.source_url }}"
           EXT="${URL##*.}"
-          if [ "$EXT" = "gz" ]; then TAR_FLAG="z"; else TAR_FLAG="J"; fi
           curl -sL "$URL" -o /tmp/src.tar.${EXT}
-          tar -x${TAR_FLAG}f /tmp/src.tar.${EXT} --strip-components=1
-          BUILD=$(gcc -dumpmachine)
-          CC="zig cc" \
-          CFLAGS="-target ${TARGET} -O2 -fno-pie" \
-          LDFLAGS="-static -no-pie" \
+          case "${EXT}" in
+            gz)  tar -xzf /tmp/src.tar.${EXT} --strip-components=1 ;;
+            xz)  tar -xJf /tmp/src.tar.${EXT} --strip-components=1 ;;
+            *)   tar -xf /tmp/src.tar.${EXT} --strip-components=1 ;;
+          esac
+
+          BUILD=$(gcc -dumpmachine)   # e.g. x86_64-linux-gnu
+          HOST="${TARGET}"
+
+          # --- Set up compiler -------------------------------------------------
+          if [ "${TARGET}" = "x86_64-linux-musl" ]; then
+            # Use musl-gcc available from musl-tools
+            export CC=musl-gcc
+            export CFLAGS="-O2 -fno-pie"
+            export LDFLAGS="-static -no-pie"
+          else
+            # Use Zig for cross compilation
+            export CC="zig cc -target ${TARGET}"
+            export CFLAGS="-O2 -static"
+            export LDFLAGS="-static"
+          fi
+
+          # --- Configure & make ------------------------------------------------
           ./configure \
             --build="${BUILD}" \
-            --host="${TARGET}" \
+            --host="${HOST}" \
             --disable-nls \
             --disable-shared \
             --enable-static \
@@ -83,13 +103,25 @@ jobs:
             --disable-lzmadec \
             --disable-lzmainfo \
             --disable-lzma-links
+
           make -j$(nproc)
           strip src/xz/xz
+
+          # --- Package ---------------------------------------------------------
           STAGE="xz-${TARGET}"
           mkdir -p "${STAGE}"
           cp src/xz/xz "${STAGE}/"
           tar -cJf "${STAGE}.tar.xz" "${STAGE}"
           sha256sum "${STAGE}.tar.xz" | tee "${STAGE}.tar.xz.SHA256"
+          echo "Built: ${STAGE}.tar.xz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xz-${{ matrix.target }}
+          path: |
+            xz-${{ matrix.target }}.tar.xz
+            xz-${{ matrix.target }}.tar.xz.SHA256
 
   release:
     needs: build
