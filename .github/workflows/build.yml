@@ -86,14 +86,23 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
     steps:
-      - uses: dtolnay/rust-toolchain@stable
-
       - if: runner.os == 'Linux'
         name: 安装依赖
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: musl-tools upx-ucl libelf-dev zlib1g-dev
+          packages: musl-tools upx-ucl libelf-dev zlib1g-dev linux-headers-generic
           version: 1.0
+
+      - if: runner.os == 'Linux'
+        name: 修复 musl asm 头文件路径
+        run: |
+          arch="${{ matrix.t }}"
+          case "$arch" in
+            x86_64*)  sudo ln -sf /usr/include/x86_64-linux-gnu/asm /usr/include/asm ;;
+            aarch64*) sudo ln -sf /usr/include/aarch64-linux-gnu/asm /usr/include/asm ;;
+            i686*)    sudo ln -sf /usr/include/i386-linux-gnu/asm    /usr/include/asm ;;
+            arm*)     sudo ln -sf /usr/include/arm-linux-gnueabihf/asm /usr/include/asm ;;
+          esac
 
       - if: runner.os == 'Windows'
         name: 安装依赖
