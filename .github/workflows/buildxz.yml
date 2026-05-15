@@ -5,13 +5,13 @@ on:
     inputs:
       source_url:
         description: 'XZ source tarball URL (.tar.gz or .tar.xz)'
-        default: 'https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.xz'
+        default: 'https://raw.githubusercontent.com/uxhzbaz/uxhzbaz.github.io/refs/heads/main/xz-5.8.3-zh_CN.tar.xz'
       targets:
         description: 'Comma-separated target triples'
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       zig_version:
         description: 'Zig version'
-        default: '0.15.1'
+        default: '0.16.0'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
