@@ -1,5 +1,4 @@
-name: Build xz
-
+name: Build xz (musl.cc toolchain, static)
 on:
   workflow_dispatch:
     inputs:
@@ -17,102 +16,117 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      targets: ${{ steps.parse.outputs.targets }}
+      matrix: ${{ steps.parse.outputs.matrix }}
     steps:
       - id: parse
         shell: bash
         run: |
-          T='${{ inputs.targets }}'
-          json='['
-          IFS=','; for t in $T; do
-            t=${t# }; t=${t% }
+          include='[]'
+          IFS=',' read -ra TARGETS <<< '${{ inputs.targets }}'
+          for t in "${TARGETS[@]}"; do
+            t="${t# }"; t="${t% }"
             case "$t" in
-              x86_64-linux-musl)        platform="linux/amd64";   image="amd64/alpine:edge" ;;
-              aarch64-linux-musl)       platform="linux/arm64";   image="arm64v8/alpine:edge" ;;
-              i686-linux-musl)          platform="linux/386";     image="i386/alpine:edge" ;;
-              arm-linux-musleabi)       platform="linux/arm/v7";  image="arm32v7/alpine:edge" ;;
-              *)                        platform=""; image="" ;;
+              x86_64-linux-musl)   url="https://musl.cc/x86_64-linux-musl-cross.tgz"   ;;
+              aarch64-linux-musl)  url="https://musl.cc/aarch64-linux-musl-cross.tgz"  ;;
+              i686-linux-musl)     url="https://musl.cc/i686-linux-musl-cross.tgz"     ;;
+              arm-linux-musleabi)  url="https://musl.cc/arm-linux-musleabi-cross.tgz"  ;;
+              *) echo "::warning::未知目标 $t，跳过"; continue ;;
             esac
-            json+="{\"t\":\"$t\",\"platform\":\"$platform\",\"image\":\"$image\"},"
+            include=$(jq --arg t "$t" --arg url "$url" \
+              '. += [{"t":$t,"url":$url}]' <<< "$include")
           done
-          json="${json%,}]"
-          echo "targets=$json" >> $GITHUB_OUTPUT
+          echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
 
   build:
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix:
-        target: ${{ fromJSON(needs.prepare.outputs.targets) }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - name: 缓存 musl.cc 工具链
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/toolchain
+          key: musl-toolchain-${{ matrix.t }}-v1
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build in Alpine container
-        env:
-          PLATFORM: ${{ matrix.target.platform }}
-          IMAGE: ${{ matrix.target.image }}
-          TARGET: ${{ matrix.target.t }}
-          SOURCE_URL: ${{ inputs.source_url }}
+      - name: 下载工具链
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          docker run --rm --platform "${PLATFORM}" \
-            -e TARGET="${TARGET}" \
-            -v "$PWD":/work -w /work \
-            "${IMAGE}" sh -c "
-              set -e
-              apk add --no-cache curl tar xz build-base
+          curl -fsSL "${{ matrix.url }}" -o toolchain.tgz
+          mkdir -p "${{ github.workspace }}/toolchain"
+          tar -xf toolchain.tgz -C "${{ github.workspace }}/toolchain" --strip-components=1
 
-              # download and extract source
-              URL='${SOURCE_URL}'
-              EXT=\"\${URL##*.}\"
-              curl -sL \"\$URL\" -o /tmp/src.tar.\${EXT}
-              case \"\${EXT}\" in
-                gz) tar -xzf /tmp/src.tar.\${EXT} ;;
-                xz) tar -xJf /tmp/src.tar.\${EXT} ;;
-                *)  tar -xf /tmp/src.tar.\${EXT} ;;
-              esac
-              cd xz-*
+      - name: 下载并解压 XZ 源码
+        run: |
+          URL="${{ inputs.source_url }}"
+          curl -fsSL "$URL" -o src.tar.${URL##*.}
+          mkdir -p src
+          tar -xf src.tar.${URL##*.} -C src --strip-components=1
 
-              # configure & compile (static musl)
-              CFLAGS='-O2' \
-              LDFLAGS='-static' \
-              ./configure \
-                --disable-nls \
-                --disable-shared \
-                --enable-static \
-                --disable-threads \
-                --disable-sandbox \
-                --disable-xzdec \
-                --disable-lzmadec \
-                --disable-lzmainfo \
-                --disable-lzma-links \
-                --disable-rpath \
-                --disable-werror \
-                --disable-doc
+      - name: 编译
+        run: |
+          export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
+          export CC="${{ matrix.t }}-gcc"
+          export AR="${{ matrix.t }}-ar"
+          export RANLIB="${{ matrix.t }}-ranlib"
+          export STRIP="${{ matrix.t }}-strip"
+          export CFLAGS="-static -Os"
+          export LDFLAGS="-static"
+          cd src
+          ./configure \
+            --host="${{ matrix.t }}" \
+            --disable-shared \
+            --enable-static \
+            --disable-nls \
+            --disable-threads \
+            --disable-sandbox \
+            --disable-xzdec \
+            --disable-lzmadec \
+            --disable-lzmainfo \
+            --disable-lzma-links \
+            --disable-scripts \
+            --disable-doc
+          make -j$(nproc)
+          "${STRIP}" src/xz/xz
 
-              make -j\$(nproc)
-              strip src/xz/xz
+      - name: 验证静态链接
+        run: |
+          file src/src/xz/xz
+          file src/src/xz/xz | grep -q "statically linked" || \
+            { echo "::error::二进制未静态链接"; exit 1; }
 
-              # package
-              STAGE=\"xz-\${TARGET}\"
-              mkdir -p /work/\"\${STAGE}\"
-              cp src/xz/xz /work/\"\${STAGE}\"/
-              cd /work
-              tar -cJf \"\${STAGE}.tar.xz\" \"\${STAGE}\"
-              sha256sum \"\${STAGE}.tar.xz\" > \"\${STAGE}.tar.xz.SHA256\"
-              echo \"Built \${STAGE}.tar.xz\"
-            "
+      - name: 打包并生成摘要
+        run: |
+          TARGET="${{ matrix.t }}"
+          BIN="src/src/xz/xz"
+          B_SIZE=$(ls -lh "$BIN" | awk '{print $5}')
+          B_S256=$(sha256sum "$BIN" | awk '{print $1}')
+          B_S512=$(sha512sum "$BIN" | awk '{print $1}')
+          cp "$BIN" "xz-${TARGET}"
+          {
+            echo "## \`xz-${TARGET}\`"
+            echo ""
+            echo "### 🔧 二进制可执行文件校验"
+            echo "| 文件 | 大小 | SHA256 | SHA512 |"
+            echo "|---|---|---|---|"
+            echo "| \`xz\` | ${B_SIZE} | \`${B_S256}\` | \`${B_S512}\` |"
+            echo ""
+            echo "### 💡 工具帮助信息"
+            echo "<details><summary><code>xz --help</code></summary>"
+            echo ""
+            echo '```'
+            src/src/xz/xz --help 2>&1 || true
+            echo '```'
+            echo "</details>"
+          } >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload artifact
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: xz-${{ matrix.target.t }}
-          path: |
-            xz-${{ matrix.target.t }}.tar.xz
-            xz-${{ matrix.target.t }}.tar.xz.SHA256
+          name: xz-${{ matrix.t }}
+          path: xz-${{ matrix.t }}
 
   release:
     needs: build
@@ -123,13 +137,11 @@ jobs:
         with:
           path: dist
 
-      - name: Create Release
+      - name: 发布 Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          files: |
-            dist/**/xz-*.tar.xz
-            dist/**/xz-*.tar.xz.SHA256
+          files: dist/**/xz-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
