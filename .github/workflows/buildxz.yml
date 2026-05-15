@@ -74,12 +74,6 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
     steps:
-      - name: 安装依赖
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: xz-utils
-          version: 1.0
-
       - name: 缓存工具链
         id: cache-tc
         uses: actions/cache@v4
@@ -89,18 +83,10 @@ jobs:
 
       - name: 下载并解压工具链
         if: steps.cache-tc.outputs.cache-hit != 'true'
-        env:
-          TOOLCHAIN_DIR: ${{ github.workspace }}/toolchain
         run: |
           curl -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.7z
-          pip install py7zr --quiet
-          python3 - <<'EOF'
-          import py7zr, os
-          dest = os.environ["TOOLCHAIN_DIR"]
-          os.makedirs(dest, exist_ok=True)
-          with py7zr.SevenZipFile("toolchain.7z", mode="r") as z:
-              z.extractall(path=dest)
-          EOF
+          mkdir -p "${{ github.workspace }}/toolchain"
+          bsdtar -xf toolchain.7z -C "${{ github.workspace }}/toolchain"
           inner=$(find "${{ github.workspace }}/toolchain" -mindepth 1 -maxdepth 1 -type d | head -1)
           if [[ -n "$inner" ]]; then
             shopt -s dotglob
