@@ -1,4 +1,4 @@
-name: B
+name: a
 run-name: ${{ github.event.inputs.run_name || github.actor }}
 on:
   workflow_dispatch:
@@ -47,10 +47,10 @@ jobs:
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
             case "$t" in
-              x86_64-linux-musl)    tc_url="${TOOLCHAIN_BASE}/x86_64-linux-musl-${TOOLCHAIN_VERSION}.7z"   ;;
-              aarch64-linux-musl)   tc_url="${TOOLCHAIN_BASE}/aarch64-linux-musl-${TOOLCHAIN_VERSION}.7z"  ;;
-              i686-linux-musl)      tc_url="${TOOLCHAIN_BASE}/i686-linux-musl-${TOOLCHAIN_VERSION}.7z"     ;;
-              arm-linux-musleabi)   tc_url="${TOOLCHAIN_BASE}/arm-linux-musleabi-${TOOLCHAIN_VERSION}.7z"  ;;
+              x86_64-linux-musl)    tc_url="${TOOLCHAIN_BASE}/x86_64-linux-musl-${TOOLCHAIN_VERSION}.7z"    ;;
+              aarch64-linux-musl)   tc_url="${TOOLCHAIN_BASE}/aarch64-linux-musl-${TOOLCHAIN_VERSION}.7z"   ;;
+              i686-linux-musl)      tc_url="${TOOLCHAIN_BASE}/i686-linux-musl-${TOOLCHAIN_VERSION}.7z"      ;;
+              arm-linux-musleabi)   tc_url="${TOOLCHAIN_BASE}/arm-linux-musleabi-${TOOLCHAIN_VERSION}.7z"   ;;
               armv7-linux-musleabi) tc_url="${TOOLCHAIN_BASE}/armv7-linux-musleabi-${TOOLCHAIN_VERSION}.7z" ;;
               *)
                 echo "::warning::未知目标 $t，跳过"
@@ -92,10 +92,13 @@ jobs:
         run: |
           curl -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.7z
           mkdir -p "${{ github.workspace }}/toolchain"
-          7z x toolchain.7z -o"${{ github.workspace }}/toolchain" -y
-          # benjaminwan 包解压后是 <target>/ 子目录，将内容提升一层
+          # -snl 跳过绝对路径危险符号链接（ld-musl-*.so.1 -> /lib/libc.so）
+          # 静态编译不需要该链接，忽略安全
+          7z x toolchain.7z -o"${{ github.workspace }}/toolchain" -snl -y
+          # 提升子目录（解压结果在 <target>/ 子目录下）
           inner=$(find "${{ github.workspace }}/toolchain" -mindepth 1 -maxdepth 1 -type d | head -1)
-          if [[ -n "$inner" && "$inner" != "${{ github.workspace }}/toolchain" ]]; then
+          if [[ -n "$inner" ]]; then
+            shopt -s dotglob
             mv "$inner"/* "${{ github.workspace }}/toolchain/"
             rmdir "$inner"
           fi
@@ -125,8 +128,7 @@ jobs:
             ${{ github.event.inputs.configure_args }}
           make -j$(nproc)
 
-      - name: 收集二进制
-        id: collect
+      - name: 收集并 strip 二进制
         run: |
           TARGET="${{ matrix.t }}"
           NAMES_INPUT="${{ github.event.inputs.binary_names }}"
@@ -157,8 +159,6 @@ jobs:
             "$STRIP_BIN" "$f" 2>/dev/null || true
             cp "$f" "dist/${TARGET}-${fname}"
           done
-
-          echo "dist_files=$(ls dist/ | tr '\n' ' ')" >> $GITHUB_OUTPUT
 
       - name: 验证静态链接
         run: |
