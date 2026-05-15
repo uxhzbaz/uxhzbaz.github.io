@@ -31,9 +31,8 @@ jobs:
     name: 解析参数
     runs-on: ubuntu-latest
     outputs:
-      s: ${{ steps.p.outputs.s }}
-      t: ${{ steps.p.outputs.t }}
-      first_target: ${{ steps.p.outputs.first_target }}
+      matrix: ${{ steps.p.outputs.matrix }}
+      first_source_first_target: ${{ steps.p.outputs.first_source_first_target }}
     steps:
       - id: p
         shell: bash
@@ -41,32 +40,39 @@ jobs:
           U: ${{ github.event.inputs.u }}
           T: ${{ github.event.inputs.t }}
         run: |
-          sources='['; IFS=','; for u in $U; do
-            u=${u# }; u=${u% }
+          matrix='{"include":[}'
+          first_sft=''
+          IFS=','; sources=(); for u in $U; do
+            u=${u# }; u=${u% }; sources+=("$u")
+          done
+          targets=(); for t in $T; do
+            t=${t# }; t=${t% }; targets+=("$t")
+          done
+
+          first=true
+          for u in "${sources[@]}"; do
             r=${u%%/archive/*}; r=${r##*/}
             tag=${u##*/archive/refs/tags/}
             tag=${tag%.tar.gz}; tag=${tag%.tar.xz}; tag=${tag%.zip}; tag=${tag%.tgz}; tag=${tag%.*}
-            sources+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"${r}-${tag}\"},"
-          done; sources="${sources%,}]"
-          targets='['; first=''; for t in $T; do
-            t=${t# }; t=${t% }
-            case $t in *windows*) o=windows-latest;; *apple*) o=macos-latest;; *) o=ubuntu-latest;; esac
-            c=''; [[ $t == *riscv* ]] && c='--no-default-features'
-            targets+="{\"t\":\"$t\",\"o\":\"$o\",\"c\":\"$c\"},"
-            [[ -z "$first" ]] && first="$t"
-          done; targets="${targets%,}]"
-          echo "s=$sources" >> $GITHUB_OUTPUT
-          echo "t=$targets" >> $GITHUB_OUTPUT
-          echo "first_target=$first" >> $GITHUB_OUTPUT
+            b="${r}-${tag}"
+            for t in "${targets[@]}"; do
+              case $t in *windows*) o=windows-latest ;; *apple*) o=macos-latest ;; *) o=ubuntu-latest ;; esac
+              c=''; [[ $t == *riscv* ]] && c='--no-default-features'
+              matrix+="{\"u\":\"$u\",\"r\":\"$r\",\"b\":\"$b\",\"t\":\"$t\",\"o\":\"$o\",\"c\":\"$c\"},"
+              [[ "$first" == true ]] && { first_sft="${b}|${t}"; first=false; }
+            done
+          done
+          matrix="${matrix%,}]}"
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "first_source_first_target=$first_sft" >> $GITHUB_OUTPUT
 
   b:
     needs: s
-    name: ${{ matrix.s.b }}-${{ matrix.t.t }}
-    runs-on: ${{ matrix.t.o }}
+    name: ${{ matrix.b }}-${{ matrix.t }}
+    runs-on: ${{ matrix.o }}
     strategy:
-      matrix:
-        s: ${{ fromJSON(needs.s.outputs.s) }}
-        t: ${{ fromJSON(needs.s.outputs.t) }}
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
     steps:
       - uses: dtolnay/rust-toolchain@stable
 
@@ -86,18 +92,18 @@ jobs:
         run: brew install upx
 
       - name: 缓存 Cargo
-  uses: actions/cache@v4
-  with:
-    path: |
-      ~/.cargo/registry/index
-      ~/.cargo/registry/cache
-      ~/.cargo/git/db
-    key: ${{ runner.os }}-${{ matrix.t.t }}-cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ matrix.t }}-cargo
 
       - name: 下载并解压源码
         shell: bash
         run: |
-          curl -sL ${{ matrix.s.u }} | tar -xz --strip-components=1
+          curl -sL ${{ matrix.u }} | tar -xz --strip-components=1
           grep -q '^strip *=' Cargo.toml && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml || \
             (grep -q '^\[profile\.release\]' Cargo.toml && \
               perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml || \
@@ -107,22 +113,22 @@ jobs:
         name: 编译
         with:
           command: build
-          args: --release ${{ github.event.inputs.l != 'false' && '--locked' || '' }} ${{ matrix.t.c }}
-          target: ${{ matrix.t.t }}
+          args: --release ${{ github.event.inputs.l != 'false' && '--locked' || '' }} ${{ matrix.c }}
+          target: ${{ matrix.t }}
 
       - if: runner.os == 'Windows'
         name: 设置exe后缀
         shell: bash
         run: echo "EXE=.exe" >> $GITHUB_ENV
 
-      - name: 打包并生成摘要
+      - name: 生成摘要
         shell: bash
         env:
           NAMES_INPUT: ${{ github.event.inputs.n }}
           USE_UPX: ${{ github.event.inputs.upx }}
-          TARGET: ${{ matrix.t.t }}
-          AB: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          IS_FIRST_TARGET: ${{ matrix.t.t == needs.s.outputs.first_target }}
+          TARGET: ${{ matrix.t }}
+          AB: ${{ matrix.b }}-${{ matrix.t }}
+          IS_FIRST: ${{ format('{0}|{1}', matrix.b, matrix.t) == needs.s.outputs.first_source_first_target }}
         run: |
           RD="target/${TARGET}/release"
           declare -a BINS=()
@@ -140,7 +146,6 @@ jobs:
             done < <(find "$RD" -maxdepth 1 \( -type f -o -type l \) \( -name "*${EXE}" -o ! -name "*.*" \) -print0 2>/dev/null | sort -z)
           fi
           [[ ${#BINS[@]} -eq 0 ]] && { echo "::error::未找到任何匹配的二进制文件"; exit 1; }
-          echo "找到二进制: ${BINS[*]}"
 
           if [[ "$USE_UPX" != "false" ]]; then
             for bin in "${BINS[@]}"; do
@@ -168,7 +173,7 @@ jobs:
             done
           } >> $GITHUB_STEP_SUMMARY
 
-          if [[ "$IS_FIRST_TARGET" == "true" ]]; then
+          if [[ "$IS_FIRST" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 💡 工具帮助信息" >> $GITHUB_STEP_SUMMARY
             for bin in "${BINS[@]}"; do
@@ -184,8 +189,13 @@ jobs:
             done
           fi
 
+          for bin in "${BINS[@]}"; do
+            cp "${RD}/${bin}" "./${AB}-${bin}${EXE}"
+          done
+          echo "BINS_PATHS=$(ls ./${AB}-*${EXE} 2>/dev/null | tr '\n' ' ')" >> $GITHUB_ENV
+
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.s.b }}-${{ matrix.t.t }}
-          path: target/${{ matrix.t.t }}/release/
+          name: ${{ matrix.b }}-${{ matrix.t }}
+          path: ${{ env.BINS_PATHS }}
