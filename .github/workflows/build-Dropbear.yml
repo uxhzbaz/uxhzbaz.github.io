@@ -1,4 +1,4 @@
-name: Build Binaries
+name: Build Dropbear
 
 on:
   workflow_dispatch:
@@ -42,7 +42,7 @@ jobs:
       matrix:
         target: ${{ fromJSON(needs.prepare.outputs.targets) }}
     env:
-      ZIG_VERSION: 0.16.0
+      ZIG_VERSION: 0.15.1
       JOBS: 8
     steps:
       - name: Install build deps
@@ -79,7 +79,6 @@ jobs:
           curl -fsSL "$SRC_URL" -o "$src_tar"
           echo "Extracting source..."
           tar -C "$builddir" -xzf "$src_tar"
-          # Assume single top-level directory after extraction
           src_dir=$(tar -tzf "$src_tar" | head -1 | cut -d/ -f1)
           cd "${builddir}/${src_dir}"
 
@@ -88,6 +87,7 @@ jobs:
           CC="${ZIG_BIN} cc -target ${TARGET}" \
           CFLAGS="-Os -fno-pie" \
           LDFLAGS="-static -no-pie" \
+          CPPFLAGS="-DDROPBEAR_X11FWD" \
           ./configure \
             --host="${TARGET}" \
             --disable-pam \
