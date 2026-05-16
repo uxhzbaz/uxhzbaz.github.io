@@ -40,7 +40,6 @@ jobs:
         name: 获取 Zig 最新 dev URL
         run: |
           index=$(curl -fsSL https://ziglang.org/download/index.json)
-          # master 字段下取 x86_64-linux 和 aarch64-linux 的 tarball URL
           x86_url=$(echo "$index" | jq -r '.master["x86_64-linux"].tarball')
           arm_url=$(echo "$index" | jq -r '.master["aarch64-linux"].tarball')
           ver=$(echo "$index" | jq -r '.master.version')
@@ -132,11 +131,22 @@ jobs:
           ZIG_BIN="${{ github.workspace }}/zig/zig"
           echo "Zig $("$ZIG_BIN" version) -> $TARGET"
 
+          WRAPPERS="${{ github.workspace }}/wrappers"
+          mkdir -p "$WRAPPERS"
+
+          printf '#!/bin/sh\nexec "%s" cc -target %s "$@"\n' "$ZIG_BIN" "$TARGET" > "$WRAPPERS/${TARGET}-gcc"
+          printf '#!/bin/sh\nexec "%s" c++ -target %s "$@"\n' "$ZIG_BIN" "$TARGET" > "$WRAPPERS/${TARGET}-g++"
+          printf '#!/bin/sh\nexec "%s" ar "$@"\n' "$ZIG_BIN" > "$WRAPPERS/${TARGET}-ar"
+          chmod +x "$WRAPPERS/${TARGET}-gcc" "$WRAPPERS/${TARGET}-g++" "$WRAPPERS/${TARGET}-ar"
+          export PATH="$WRAPPERS:$PATH"
+
           cd src
           autoconf 2>/dev/null || true
           autoheader 2>/dev/null || true
 
-          CC="${ZIG_BIN} cc -target ${TARGET}" \
+          CC="${TARGET}-gcc" \
+          CXX="${TARGET}-g++" \
+          AR="${TARGET}-ar" \
           CFLAGS="-Os -fno-pie" \
           LDFLAGS="-static -no-pie" \
           CPPFLAGS="-DDROPBEAR_X11FWD" \
@@ -154,7 +164,7 @@ jobs:
           [[ -x ./dropbear ]] || { echo "::error::编译失败"; exit 1; }
 
           for bin in dropbear dbclient dropbearkey dropbearconvert scp; do
-            [[ -f "./$bin" ]] && "$ZIG_BIN" objcopy --strip-all "./$bin" 2>/dev/null || strip "./$bin" 2>/dev/null || true
+            [[ -f "./$bin" ]] && "$ZIG_BIN" objcopy --strip-all "./$bin" 2>/dev/null || true
           done
 
       - name: 收集产物
