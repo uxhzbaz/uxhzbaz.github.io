@@ -17,6 +17,10 @@ on:
         description: '目标三元组，逗号分隔'
         default: 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi'
         required: true
+      publish_release:
+        description: '发布到 Release (true/false)'
+        default: 'false'
+        required: false
 
 permissions:
   contents: write
@@ -35,6 +39,7 @@ jobs:
       zig_x86_64_url: ${{ steps.zig.outputs.zig_x86_64_url }}
       zig_aarch64_url: ${{ steps.zig.outputs.zig_aarch64_url }}
       zig_version: ${{ steps.zig.outputs.zig_version }}
+      do_release: ${{ steps.p.outputs.do_release }}
     steps:
       - id: zig
         name: 获取 Zig 最新 dev URL
@@ -56,25 +61,39 @@ jobs:
         env:
           TARGETS: ${{ github.event.inputs.targets || 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi' }}
           SOURCE_URL: ${{ github.event.inputs.source_url || 'https://github.com/mkj/dropbear/archive/refs/tags/DROPBEAR_2026.91.tar.gz' }}
+          PUBLISH: ${{ github.event.inputs.publish_release || 'false' }}
         run: |
           include='[]'
           first_key=''
           IFS=',' read -ra TS <<< "$TARGETS"
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
+            # zig 用 x86 而不是 i686，做映射
+            case "$t" in
+              i686-linux-musl)   zig_target="x86-linux-musl"   ;;
+              i686-*)            zig_target="x86-${t#i686-}"    ;;
+              *)                 zig_target="$t"                ;;
+            esac
             case "$t" in
               *aarch64*) runner="ubuntu-24.04-arm" ; zig_arch="aarch64" ;;
               *)         runner="ubuntu-latest"    ; zig_arch="x86_64"  ;;
             esac
             include=$(jq \
-              --arg t "$t" --arg runner "$runner" --arg zig_arch "$zig_arch" \
-              '. += [{"t":$t,"runner":$runner,"zig_arch":$zig_arch}]' \
+              --arg t "$t" --arg zig_target "$zig_target" \
+              --arg runner "$runner" --arg zig_arch "$zig_arch" \
+              '. += [{"t":$t,"zig_target":$zig_target,"runner":$runner,"zig_arch":$zig_arch}]' \
               <<< "$include")
             [[ -z "$first_key" ]] && first_key="$t"
           done
           echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
           echo "first_key=$first_key" >> $GITHUB_OUTPUT
           echo "source_url=$SOURCE_URL" >> $GITHUB_OUTPUT
+          # tag push 时强制发布
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "do_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "do_release=$PUBLISH" >> $GITHUB_OUTPUT
+          fi
 
   build:
     needs: s
@@ -113,15 +132,15 @@ jobs:
       - name: 构建
         env:
           TARGET: ${{ matrix.t }}
+          ZIG_TARGET: ${{ matrix.zig_target }}
           SOURCE_URL: ${{ needs.s.outputs.source_url }}
         run: |
           set -ev
           workdir="$(pwd)"
           ZIG_BIN="${{ github.workspace }}/zig/zig"
           export PATH="${{ github.workspace }}/zig:$PATH"
-          "${ZIG_BIN}" version
+          echo "Zig $("$ZIG_BIN" version) | target=$TARGET | zig_target=$ZIG_TARGET"
 
-          # 下载源码
           EXT="${SOURCE_URL##*.}"
           curl -fsSL --retry 3 --retry-delay 5 "$SOURCE_URL" -o "src.tar.${EXT}"
           mkdir -p src
@@ -131,8 +150,9 @@ jobs:
           autoconf 2>/dev/null || true
           autoheader 2>/dev/null || true
 
-          # 与成功工作流相同：CC 直接赋值为带参数的完整命令
-          CC="${ZIG_BIN} cc -target ${TARGET}" \
+          # CC 传带参数的完整字符串（与原成功工作流相同做法）
+          # --host 用用户指定的原始三元组，zig_target 仅用于 -target 参数
+          CC="${ZIG_BIN} cc -target ${ZIG_TARGET}" \
           CFLAGS="-Os -fno-pie" \
           LDFLAGS="-static -no-pie" \
           CPPFLAGS="-DDROPBEAR_X11FWD" \
@@ -153,7 +173,6 @@ jobs:
             [[ -f "./$bin" ]] && strip "./$bin" 2>/dev/null || true
           done
 
-          # 打包
           mkdir -p "${workdir}/dist"
           for bin in dropbear dbclient dropbearkey dropbearconvert scp; do
             [[ -x "./$bin" ]] && cp "./$bin" "${workdir}/dist/"
@@ -222,9 +241,9 @@ jobs:
 
   release:
     name: 发布 Release
-    needs: build
+    needs: [s, build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.s.outputs.do_release == 'true'
     steps:
       - name: 下载所有产物
         uses: actions/download-artifact@v4
