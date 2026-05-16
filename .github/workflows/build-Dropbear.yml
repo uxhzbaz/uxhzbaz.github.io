@@ -22,7 +22,6 @@ permissions:
   contents: write
 
 env:
-  ZIG_VERSION: '0.16.0'
   JOBS: 8
 
 jobs:
@@ -33,8 +32,27 @@ jobs:
       matrix: ${{ steps.p.outputs.matrix }}
       first_key: ${{ steps.p.outputs.first_key }}
       source_url: ${{ steps.p.outputs.source_url }}
+      zig_x86_64_url: ${{ steps.zig.outputs.zig_x86_64_url }}
+      zig_aarch64_url: ${{ steps.zig.outputs.zig_aarch64_url }}
+      zig_version: ${{ steps.zig.outputs.zig_version }}
     steps:
+      - id: zig
+        name: 获取 Zig 最新 dev URL
+        run: |
+          index=$(curl -fsSL https://ziglang.org/download/index.json)
+          # master 字段下取 x86_64-linux 和 aarch64-linux 的 tarball URL
+          x86_url=$(echo "$index" | jq -r '.master["x86_64-linux"].tarball')
+          arm_url=$(echo "$index" | jq -r '.master["aarch64-linux"].tarball')
+          ver=$(echo "$index" | jq -r '.master.version')
+          echo "zig_x86_64_url=$x86_url" >> $GITHUB_OUTPUT
+          echo "zig_aarch64_url=$arm_url" >> $GITHUB_OUTPUT
+          echo "zig_version=$ver" >> $GITHUB_OUTPUT
+          echo "x86_64: $x86_url"
+          echo "aarch64: $arm_url"
+          echo "version: $ver"
+
       - id: p
+        name: 解析三元组
         shell: bash
         env:
           TARGETS: ${{ github.event.inputs.targets || 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi' }}
@@ -46,12 +64,12 @@ jobs:
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
             case "$t" in
-              *aarch64*) runner="ubuntu-24.04-arm" ;;
-              *)         runner="ubuntu-latest"    ;;
+              *aarch64*) runner="ubuntu-24.04-arm" ; zig_arch="aarch64" ;;
+              *)         runner="ubuntu-latest"    ; zig_arch="x86_64"  ;;
             esac
             include=$(jq \
-              --arg t "$t" --arg runner "$runner" \
-              '. += [{"t":$t,"runner":$runner}]' \
+              --arg t "$t" --arg runner "$runner" --arg zig_arch "$zig_arch" \
+              '. += [{"t":$t,"runner":$runner,"zig_arch":$zig_arch}]' \
               <<< "$include")
             [[ -z "$first_key" ]] && first_key="$t"
           done
@@ -73,23 +91,31 @@ jobs:
           packages: autoconf automake make
           version: 1.0
 
+      - name: 设置 Zig URL
+        id: zig_url
+        run: |
+          if [[ "${{ matrix.zig_arch }}" == "aarch64" ]]; then
+            echo "url=${{ needs.s.outputs.zig_aarch64_url }}" >> $GITHUB_OUTPUT
+          else
+            echo "url=${{ needs.s.outputs.zig_x86_64_url }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: 缓存 Zig
         id: cache-zig
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/zig
-          key: zig-${{ runner.arch }}-${{ env.ZIG_VERSION }}
+          key: zig-${{ matrix.zig_arch }}-${{ needs.s.outputs.zig_version }}
 
       - name: 下载 Zig
         if: steps.cache-zig.outputs.cache-hit != 'true'
         run: |
-          zig_arch=$(uname -m)
-          zig_pkg="zig-linux-${zig_arch}-${ZIG_VERSION}.tar.xz"
-          zig_url="https://ziglang.org/download/${ZIG_VERSION}/${zig_pkg}"
-          echo "Downloading Zig ${ZIG_VERSION}..."
-          curl -fsSL --retry 3 --retry-delay 5 "$zig_url" -o zig.tar.xz
+          ZIG_URL="${{ steps.zig_url.outputs.url }}"
+          echo "Downloading Zig from $ZIG_URL"
+          curl -fsSL --retry 3 --retry-delay 5 "$ZIG_URL" -o zig.tar.xz
           mkdir -p "${{ github.workspace }}/zig"
           tar -xJf zig.tar.xz -C "${{ github.workspace }}/zig" --strip-components=1
+          "${{ github.workspace }}/zig/zig" version
 
       - name: 下载并解压源码
         run: |
@@ -104,8 +130,7 @@ jobs:
           TARGET: ${{ matrix.t }}
         run: |
           ZIG_BIN="${{ github.workspace }}/zig/zig"
-          export PATH="${{ github.workspace }}/zig:$PATH"
-          echo "Zig version: $("$ZIG_BIN" version)"
+          echo "Zig $("$ZIG_BIN" version) -> $TARGET"
 
           cd src
           autoconf 2>/dev/null || true
@@ -126,34 +151,28 @@ jobs:
             PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" \
             STATIC=1
 
-          [[ -x ./dropbear ]] || { echo "::error::编译失败: dropbear 不存在"; exit 1; }
+          [[ -x ./dropbear ]] || { echo "::error::编译失败"; exit 1; }
 
-          "$ZIG_BIN" objcopy --strip-all ./dropbear   2>/dev/null || strip ./dropbear   || true
-          "$ZIG_BIN" objcopy --strip-all ./dbclient    2>/dev/null || strip ./dbclient    || true
-          "$ZIG_BIN" objcopy --strip-all ./dropbearkey 2>/dev/null || strip ./dropbearkey || true
-          "$ZIG_BIN" objcopy --strip-all ./dropbearconvert 2>/dev/null || strip ./dropbearconvert || true
-          "$ZIG_BIN" objcopy --strip-all ./scp         2>/dev/null || strip ./scp         || true
+          for bin in dropbear dbclient dropbearkey dropbearconvert scp; do
+            [[ -f "./$bin" ]] && "$ZIG_BIN" objcopy --strip-all "./$bin" 2>/dev/null || strip "./$bin" 2>/dev/null || true
+          done
 
       - name: 收集产物
         env:
           TARGET: ${{ matrix.t }}
         run: |
           mkdir -p dist
-          for bin in src/dropbear src/dbclient src/dropbearkey src/dropbearconvert src/scp; do
-            [[ -x "$bin" ]] && cp "$bin" "dist/$(basename "$bin")"
+          for bin in dropbear dbclient dropbearkey dropbearconvert scp; do
+            [[ -x "src/$bin" ]] && cp "src/$bin" "dist/$bin"
           done
-          echo "产物列表:"
-          ls -lh dist/
+          echo "产物:"; ls -lh dist/
 
       - name: 验证静态链接
         run: |
           fail=0
           for f in dist/*; do
             file "$f"
-            if ! file "$f" | grep -q "statically linked"; then
-              echo "::error::$f 未静态链接"
-              fail=1
-            fi
+            file "$f" | grep -q "statically linked" || { echo "::error::$f 未静态链接"; fail=1; }
           done
           [[ $fail -eq 0 ]] || exit 1
 
