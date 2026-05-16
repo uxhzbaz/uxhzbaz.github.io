@@ -1,11 +1,10 @@
-name: Build Dropbear
+name: Build Binaries
+
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
-      source_url:
-        description: 'Dropbear source tar.gz URL'
+      src_url:
+        description: 'Source tarball URL (e.g. dropbear)'
         default: 'https://github.com/mkj/dropbear/archive/refs/tags/DROPBEAR_2026.91.tar.gz'
         required: true
       targets:
@@ -13,83 +12,82 @@ on:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
         required: true
 
+permissions:
+  contents: write
+
 jobs:
   prepare:
+    name: Prepare matrix
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.parse.outputs.targets }}
-      source_url: ${{ steps.parse.outputs.source_url }}
     steps:
       - id: parse
+        shell: bash
+        env:
+          T: ${{ github.event.inputs.targets }}
         run: |
-          IFS=',' read -ra T <<< "${{ github.event.inputs.targets }}"
-          JSON="["
-          for t in "${T[@]}"; do
-            t="${t#"${t%%[![:space:]]*}"}"  # trim leading spaces
-            t="${t%"${t##*[![:space:]]}"}"  # trim trailing spaces
-            JSON+="\"$t\","
-          done
-          JSON="${JSON%,}]"
-          echo "targets=${JSON}" >> "$GITHUB_OUTPUT"
-          echo "source_url=${{ github.event.inputs.source_url }}" >> "$GITHUB_OUTPUT"
+          targets='['; IFS=','; for t in $T; do
+            t=${t# }; t=${t% }
+            targets+="\"$t\","
+          done; targets="${targets%,}]"
+          echo "targets=$targets" >> $GITHUB_OUTPUT
 
   build:
+    name: Build ${{ matrix.target }}
     needs: prepare
+    runs-on: ${{ (contains(matrix.target, 'arm') || contains(matrix.target, 'aarch64')) && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         target: ${{ fromJSON(needs.prepare.outputs.targets) }}
-    runs-on: ubuntu-latest
     env:
-      ZIG_VERSION: 0.15.1
+      ZIG_VERSION: 0.16.0
       JOBS: 8
     steps:
-      - name: Install dependencies
+      - name: Install build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y curl ca-certificates tar xz-utils autoconf automake make gcc g++ cmake ninja-build
 
-      - name: Build static dropbear (musl)
+      - name: Build statically with Zig + musl
         env:
+          SRC_URL: ${{ github.event.inputs.src_url }}
           TARGET: ${{ matrix.target }}
-          SOURCE_URL: ${{ needs.prepare.outputs.source_url }}
         run: |
-          set -e
+          set -ev
+
           workdir="$(pwd)"
           builddir="$(mktemp -d)"
           trap 'rm -rf "$builddir"' EXIT
 
           # ---- Download Zig -------------------------------------------------
-          zig_arch="$(uname -m)"
+          zig_arch=$(uname -m)
           zig_pkg="zig-${zig_arch}-linux-${ZIG_VERSION}.tar.xz"
           zig_url="https://ziglang.org/download/${ZIG_VERSION}/${zig_pkg}"
           echo "Downloading Zig ${ZIG_VERSION}..."
           curl -fsSL "$zig_url" -o "${builddir}/${zig_pkg}"
           tar -C "$builddir" -xJf "${builddir}/${zig_pkg}"
-          zig_root="$(tar -tf "${builddir}/${zig_pkg}" | head -1 | cut -d/ -f1)"
+          zig_root=$(tar -tf "${builddir}/${zig_pkg}" | head -1 | cut -d/ -f1)
           ZIG_BIN="${builddir}/${zig_root}/zig"
           export PATH="${builddir}/${zig_root}:$PATH"
-          "$ZIG_BIN" version
+          "${ZIG_BIN}" version
 
-          # ---- Download & extract source ------------------------------------
-          src_tar="${builddir}/dropbear-src.tar.gz"
-          echo "Downloading source from $SOURCE_URL ..."
-          curl -fsSL "$SOURCE_URL" -o "$src_tar"
-          mkdir "${builddir}/src"
-          tar -xzf "$src_tar" -C "${builddir}/src"
-          cd "${builddir}/src"
-          shopt -s nullglob
-          dirs=(*/)
-          if [ ${#dirs[@]} -eq 1 ]; then
-            cd "${dirs[0]}"
-          fi
+          # ---- Download source ----------------------------------------------
+          echo "Downloading source from $SRC_URL"
+          src_tar="${builddir}/source.tar.gz"
+          curl -fsSL "$SRC_URL" -o "$src_tar"
+          echo "Extracting source..."
+          tar -C "$builddir" -xzf "$src_tar"
+          # Assume single top-level directory after extraction
+          src_dir=$(tar -tzf "$src_tar" | head -1 | cut -d/ -f1)
+          cd "${builddir}/${src_dir}"
 
-          # ---- Build --------------------------------------------------------
+          # ---- Build (static, musl) ----------------------------------------
           echo "Configuring for ${TARGET}…"
           CC="${ZIG_BIN} cc -target ${TARGET}" \
           CFLAGS="-Os -fno-pie" \
           LDFLAGS="-static -no-pie" \
-          CPPFLAGS="-DDROPBEAR_X11FWD" \
           ./configure \
             --host="${TARGET}" \
             --disable-pam \
@@ -97,20 +95,23 @@ jobs:
             --enable-bundled-libtom \
             --enable-static
 
-          echo "Building…"
+          echo "Building dropbear…"
           make -j "${JOBS}" PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" STATIC=1
 
-          [ -x ./dropbear ] || { echo "dropbear not found!"; exit 1; }
+          [[ -x ./dropbear ]] || { echo "Build failed: dropbear missing"; exit 1; }
           strip ./drop* dbclient scp || true
 
-          # ---- Package ------------------------------------------------------
-          stage="${builddir}/stage/dropbear-${TARGET}"
-          mkdir -p "$stage"
-          cp ./dropbear* dbclient scp "$stage/"
-          out="${workdir}/dropbear-${TARGET}.tar.xz"
-          tar -C "${builddir}/stage" -cJf "$out" "dropbear-${TARGET}"
-          sha256sum "$out" | tee "${out}.SHA256"
-          echo "Built: $out"
+          # ---- Package -----------------------------------------------------
+          stage_dir="${builddir}/stage/dropbear-${TARGET}"
+          mkdir -p "${stage_dir}"
+          cp ./dropbear* dbclient scp "${stage_dir}/"
+
+          out_tar="${workdir}/dropbear-${TARGET}.tar.xz"
+          echo "Creating ${out_tar}…"
+          tar -C "${builddir}/stage" -cJf "${out_tar}" "dropbear-${TARGET}"
+
+          sha256sum "${out_tar}" | tee "${out_tar}.SHA256"
+          echo "Done: ${out_tar}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -122,10 +123,9 @@ jobs:
             dropbear-${{ matrix.target }}.tar.xz.SHA256
 
   release:
-    name: Create Release
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
@@ -134,7 +134,10 @@ jobs:
         with:
           path: dist
 
-      - name: Create GitHub Release
+      - name: List artifacts
+        run: ls -lR dist
+
+      - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
