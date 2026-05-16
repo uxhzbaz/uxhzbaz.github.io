@@ -1,20 +1,13 @@
-name: Build Dropbear Static
+name: Build Dropbear
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      dropbear_version:
-        description: 'Dropbear 版本 (如 2026.91)'
-        required: true
-        default: '2026.91'
-      targets:
-        description: '目标架构 (逗号分隔)'
-        required: true
-        default: 'x86_64-linux-musl,aarch64-linux-musl'
 
 jobs:
   build:
-    name: ${{ matrix.target }}
+    name: build ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
@@ -24,104 +17,112 @@ jobs:
             runs_on: ubuntu-latest
           - target: aarch64-linux-musl
             runs_on: ubuntu-24.04-arm
-          - target: i686-linux-musl
-            runs_on: ubuntu-latest
-          - target: arm-unknown-linux-musleabi
-            runs_on: ubuntu-latest
+
+    env:
+      DROPBEAR_VERSION: 2026.91
+      ZIG_VERSION: 0.15.1
+      JOBS: 8
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: 安装依赖
+      - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl tar xz-utils bzip2 file
+          sudo apt-get install -y curl ca-certificates tar xz-utils autoconf automake make gcc g++ cmake ninja-build
 
-      - name: Build Dropbear Static
+      - name: Build static dropbearmulti (musl)
         env:
-          DROPBEAR_VERSION: ${{ inputs.dropbear_version }}
           TARGET: ${{ matrix.target }}
-          JOBS: 4
+          DROPBEAR_VERSION: ${{ env.DROPBEAR_VERSION }}
+          ZIG_VERSION: ${{ env.ZIG_VERSION }}
+          JOBS: ${{ env.JOBS }}
         run: |
-          set -e
-          cat > build-dropbear.sh << 'EOF'
-#!/bin/bash
-set -e
+          set -ev
 
-: "${DROPBEAR_VERSION:=2026.91}"
-: "${TARGET:=x86_64-linux-musl}"
-: "${JOBS:=4}"
+          workdir="$(pwd)"
+          builddir="$(mktemp -d)"
+          trap 'rm -rf "$builddir"' EXIT
 
-echo "=== Building Dropbear ${DROPBEAR_VERSION} for ${TARGET} ==="
+          # ---- Download Zig -------------------------------------------------
+          zig_arch=$(uname -m)
+          zig_pkg="zig-${zig_arch}-linux-${ZIG_VERSION}.tar.xz"
+          zig_url="https://ziglang.org/download/${ZIG_VERSION}/${zig_pkg}"
+          echo "Downloading Zig ${ZIG_VERSION}..."
+          curl -fsSL "$zig_url" -o "${builddir}/${zig_pkg}"
+          tar -C "$builddir" -xJf "${builddir}/${zig_pkg}"
+          zig_root=$(tar -tf "${builddir}/${zig_pkg}" | head -1 | cut -d/ -f1)
+          ZIG_BIN="${builddir}/${zig_root}/zig"
+          export PATH="${builddir}/${zig_root}:$PATH"
+          "${ZIG_BIN}" version
 
-workdir=$(pwd)
-builddir=$(mktemp -d)
-trap 'rm -rf "$builddir"' EXIT
+          # ---- Download Dropbear source from GitHub tag --------------------
+          dropbear_url="https://github.com/mkj/dropbear/archive/refs/tags/DROPBEAR_${DROPBEAR_VERSION}.tar.gz"
+          dropbear_tar="dropbear-${DROPBEAR_VERSION}.tar.gz"
+          echo "Downloading Dropbear ${DROPBEAR_VERSION} from GitHub..."
+          curl -fsSL "$dropbear_url" -o "${builddir}/${dropbear_tar}"
+          echo "Extracting Dropbear..."
+          tar -C "$builddir" -xzf "${builddir}/${dropbear_tar}"
+          cd "${builddir}/dropbear-DROPBEAR_${DROPBEAR_VERSION}"
 
-# 下载 Dropbear
-dropbear_tar="dropbear-${DROPBEAR_VERSION}.tar.bz2"
-dropbear_url="https://matt.ucc.asn.au/dropbear/releases/${dropbear_tar}"
-curl -fsSL "\( dropbear_url" -o " \){builddir}/${dropbear_tar}"
-tar -C "\( builddir" -xjf " \){builddir}/${dropbear_tar}"
-cd "\( {builddir}/dropbear- \){DROPBEAR_VERSION}"
+          # ---- Build (static, musl) ----------------------------------------
+          echo "Configuring for ${TARGET}…"
+          CC="${ZIG_BIN} cc -target ${TARGET}" \
+          CFLAGS="-Os -fno-pie" \
+          LDFLAGS="-static -no-pie" \
+          CPPFLAGS="-DDROPBEAR_X11FWD" \
+          ./configure \
+            --host="${TARGET}" \
+            --disable-pam \
+            --disable-zlib \
+            --enable-bundled-libtom \
+            --enable-static
 
-# 配置与编译
-make clean || true
+          echo "Building dropbear…"
+          make -j "${JOBS}" PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" STATIC=1
 
-CC="zig cc -target ${TARGET}" \
-CFLAGS="-Os -fPIE -ffunction-sections -fdata-sections" \
-LDFLAGS="-static -Wl,--gc-sections -Wl,--as-needed" \
-./configure \
-  --host="${TARGET}" \
-  --disable-pam \
-  --disable-zlib \
-  --enable-bundled-libtom \
-  --enable-static
+          [[ -x ./dropbear ]] || { echo "Build failed: dropbear missing"; exit 1; }
+          strip ./drop* dbclient scp || true
 
-make -j${JOBS} PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" STATIC=1 V=1
+          # ---- Package -----------------------------------------------------
+          stage_dir="${builddir}/stage/dropbear-${TARGET}"
+          mkdir -p "${stage_dir}"
+          cp ./dropbear* dbclient scp "${stage_dir}/"
 
-# 打包
-strip dropbear dbclient dropbearkey dropbearconvert scp 2>/dev/null || true
+          out_tar="${workdir}/dropbear-${TARGET}.tar.xz"
+          echo "Creating ${out_tar}…"
+          tar -C "${builddir}/stage" -cJf "${out_tar}" "dropbear-${TARGET}"
 
-mkdir -p "\( {workdir}/dist/dropbear- \){TARGET}"
-cp dropbear dbclient dropbearkey dropbearconvert scp "\( {workdir}/dist/dropbear- \){TARGET}/"
+          sha256sum "${out_tar}" | tee "${out_tar}.SHA256"
+          echo "Done: ${out_tar}"
 
-cd "${workdir}/dist"
-tar -cJf "dropbear-\( {DROPBEAR_VERSION}- \){TARGET}.tar.xz" "dropbear-${TARGET}"
-sha256sum "dropbear-\( {DROPBEAR_VERSION}- \){TARGET}.tar.xz" > "dropbear-\( {DROPBEAR_VERSION}- \){TARGET}.tar.xz.sha256"
-
-echo "Build completed: dropbear-\( {DROPBEAR_VERSION}- \){TARGET}.tar.xz"
-EOF
-
-          chmod +x build-dropbear.sh
-          ./build-dropbear.sh
-
-      - name: Upload Artifact
+      - name: Upload dropbear artifact
         uses: actions/upload-artifact@v4
         with:
           name: dropbear-${{ matrix.target }}
+          overwrite: true
           path: |
-            dist/*.tar.xz
-            dist/*.sha256
+            dropbear-${{ matrix.target }}.tar.xz
+            dropbear-${{ matrix.target }}.tar.xz.SHA256
 
   release:
+    name: create github release
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - name: Download artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release
-          merge-multiple: true
+          path: dist
 
-      - name: Create Release
+      - name: List artifacts
+        run: ls -lR dist
+
+      - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dropbear-${{ inputs.dropbear_version }}
-          name: Dropbear ${{ inputs.dropbear_version }} Static Binaries
-          files: release/**/*.tar.xz*
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: |
+            dist/**/dropbear-*.tar.xz
+            dist/**/dropbear-*.tar.xz.SHA256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
