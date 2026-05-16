@@ -1,93 +1,116 @@
-name: Build & Release Static Dropbear (Zig)
-
+name: Build Dropbear
+run-name: ${{ github.event.inputs.run_name || github.actor }}
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
+      run_name:
+        description: '工作流运行名称'
+        default: ''
+        required: false
       source_url:
-        description: 'Source tarball URL (tar.gz)'
+        description: 'Dropbear 源码包URL'
         default: 'https://github.com/mkj/dropbear/archive/refs/tags/DROPBEAR_2026.91.tar.gz'
         required: true
       targets:
-        description: 'Comma-separated target triples'
+        description: '目标三元组，逗号分隔'
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
         required: true
 
+permissions:
+  contents: write
+
 env:
-  ZIG_VERSION: 0.16.0
+  ZIG_VERSION: '0.16.0'
   JOBS: 8
 
 jobs:
-  prepare:
+  s:
+    name: 解析参数
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.p.outputs.matrix }}
+      first_key: ${{ steps.p.outputs.first_key }}
+      source_url: ${{ steps.p.outputs.source_url }}
     steps:
-      - id: set-matrix
+      - id: p
         shell: bash
         env:
-          TARGETS: ${{ github.event.inputs.targets }}
+          TARGETS: ${{ github.event.inputs.targets || 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi' }}
+          SOURCE_URL: ${{ github.event.inputs.source_url || 'https://github.com/mkj/dropbear/archive/refs/tags/DROPBEAR_2026.91.tar.gz' }}
         run: |
-          targets='['
-          IFS=','; for t in $TARGETS; do
-            t=${t# }; t=${t% }
+          include='[]'
+          first_key=''
+          IFS=',' read -ra TS <<< "$TARGETS"
+          for t in "${TS[@]}"; do
+            t="${t# }"; t="${t% }"
             case "$t" in
-              *aarch64*|*arm*) os="ubuntu-24.04-arm" ;;
-              *) os="ubuntu-latest" ;;
+              *aarch64*) runner="ubuntu-24.04-arm" ;;
+              *)         runner="ubuntu-latest"    ;;
             esac
-            targets+="{\"target\":\"$t\",\"runs_on\":\"$os\"},"
+            include=$(jq \
+              --arg t "$t" --arg runner "$runner" \
+              '. += [{"t":$t,"runner":$runner}]' \
+              <<< "$include")
+            [[ -z "$first_key" ]] && first_key="$t"
           done
-          targets="${targets%,}]"
-          echo "matrix=$targets" >> $GITHUB_OUTPUT
+          echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
+          echo "first_key=$first_key" >> $GITHUB_OUTPUT
+          echo "source_url=$SOURCE_URL" >> $GITHUB_OUTPUT
 
   build:
-    needs: prepare
-    name: ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on }}
+    needs: s
+    name: ${{ matrix.t }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-
+      matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
     steps:
-      - name: Install build dependencies
+      - name: 安装构建依赖
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: autoconf automake make
+          version: 1.0
+
+      - name: 缓存 Zig
+        id: cache-zig
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/zig
+          key: zig-${{ runner.arch }}-${{ env.ZIG_VERSION }}
+
+      - name: 下载 Zig
+        if: steps.cache-zig.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl ca-certificates tar xz-utils autoconf automake make gcc g++
-
-      - name: Download & compile with Zig
-        env:
-          TARGET: ${{ matrix.target }}
-          SOURCE_URL: ${{ github.event.inputs.source_url }}
-          ZIG_VERSION: ${{ env.ZIG_VERSION }}
-          JOBS: ${{ env.JOBS }}
-        run: |
-          set -ev
-
-          workdir="$(pwd)"
-          builddir="$(mktemp -d)"
-          trap 'rm -rf "$builddir"' EXIT
-
-          # ---- Download Zig -----------------------------------------------
-          zig_arch="$(uname -m)"
-          zig_pkg="zig-${zig_arch}-linux-${ZIG_VERSION}.tar.xz"
+          zig_arch=$(uname -m)
+          zig_pkg="zig-linux-${zig_arch}-${ZIG_VERSION}.tar.xz"
           zig_url="https://ziglang.org/download/${ZIG_VERSION}/${zig_pkg}"
-          echo "==> Downloading Zig ${ZIG_VERSION}"
-          curl -fsSL "$zig_url" -o "${builddir}/${zig_pkg}"
-          tar -C "$builddir" -xJf "${builddir}/${zig_pkg}"
-          zig_root="$(tar -tf "${builddir}/${zig_pkg}" | head -1 | cut -d/ -f1)"
-          ZIG_BIN="${builddir}/${zig_root}/zig"
-          export PATH="${builddir}/${zig_root}:$PATH"
-          "$ZIG_BIN" version
+          echo "Downloading Zig ${ZIG_VERSION}..."
+          curl -fsSL --retry 3 --retry-delay 5 "$zig_url" -o zig.tar.xz
+          mkdir -p "${{ github.workspace }}/zig"
+          tar -xJf zig.tar.xz -C "${{ github.workspace }}/zig" --strip-components=1
 
-          # ---- Download & extract source ----------------------------------
-          echo "==> Fetching source: $SOURCE_URL"
-          src_tar="${builddir}/source.tar.gz"
-          curl -fsSL "$SOURCE_URL" -o "$src_tar"
-          mkdir "${builddir}/src"
-          tar -xzf "$src_tar" -C "${builddir}/src" --strip-components=1 || true
-          cd "${builddir}/src"
+      - name: 下载并解压源码
+        run: |
+          SOURCE_URL="${{ needs.s.outputs.source_url }}"
+          EXT="${SOURCE_URL##*.}"
+          curl -fsSL --retry 3 --retry-delay 5 "$SOURCE_URL" -o "src.tar.${EXT}"
+          mkdir -p src
+          tar -xf "src.tar.${EXT}" -C src --strip-components=1
 
-          # ---- Configure & build (dropbear-specific) ----------------------
+      - name: 编译
+        env:
+          TARGET: ${{ matrix.t }}
+        run: |
+          ZIG_BIN="${{ github.workspace }}/zig/zig"
+          export PATH="${{ github.workspace }}/zig:$PATH"
+          echo "Zig version: $("$ZIG_BIN" version)"
+
+          cd src
+          autoconf 2>/dev/null || true
+          autoheader 2>/dev/null || true
+
           CC="${ZIG_BIN} cc -target ${TARGET}" \
           CFLAGS="-Os -fno-pie" \
           LDFLAGS="-static -no-pie" \
@@ -99,46 +122,105 @@ jobs:
             --enable-bundled-libtom \
             --enable-static
 
-          echo "==> Building dropbear multi"
-          make -j "${JOBS}" PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" STATIC=1
+          make -j"${JOBS}" \
+            PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" \
+            STATIC=1
 
-          [[ -x ./dropbear ]] || { echo "Build failed: dropbear missing"; exit 1; }
-          strip ./drop* dbclient scp || true
+          [[ -x ./dropbear ]] || { echo "::error::编译失败: dropbear 不存在"; exit 1; }
 
-          # ---- Package ----------------------------------------------------
-          stage_dir="${builddir}/stage/dropbear-${TARGET}"
-          mkdir -p "$stage_dir"
-          cp ./dropbear* dbclient scp "$stage_dir/"
+          "$ZIG_BIN" objcopy --strip-all ./dropbear   2>/dev/null || strip ./dropbear   || true
+          "$ZIG_BIN" objcopy --strip-all ./dbclient    2>/dev/null || strip ./dbclient    || true
+          "$ZIG_BIN" objcopy --strip-all ./dropbearkey 2>/dev/null || strip ./dropbearkey || true
+          "$ZIG_BIN" objcopy --strip-all ./dropbearconvert 2>/dev/null || strip ./dropbearconvert || true
+          "$ZIG_BIN" objcopy --strip-all ./scp         2>/dev/null || strip ./scp         || true
 
-          out_tar="${workdir}/dropbear-${TARGET}.tar.xz"
-          echo "==> Packing ${out_tar}"
-          tar -C "${builddir}/stage" -cJf "$out_tar" "dropbear-${TARGET}"
+      - name: 收集产物
+        env:
+          TARGET: ${{ matrix.t }}
+        run: |
+          mkdir -p dist
+          for bin in src/dropbear src/dbclient src/dropbearkey src/dropbearconvert src/scp; do
+            [[ -x "$bin" ]] && cp "$bin" "dist/$(basename "$bin")"
+          done
+          echo "产物列表:"
+          ls -lh dist/
 
-          sha256sum "$out_tar" | tee "${out_tar}.SHA256"
-          echo "Done: ${out_tar}"
+      - name: 验证静态链接
+        run: |
+          fail=0
+          for f in dist/*; do
+            file "$f"
+            if ! file "$f" | grep -q "statically linked"; then
+              echo "::error::$f 未静态链接"
+              fail=1
+            fi
+          done
+          [[ $fail -eq 0 ]] || exit 1
 
-      - name: Upload artifact
+      - name: 生成摘要
+        env:
+          TARGET: ${{ matrix.t }}
+          IS_FIRST: ${{ matrix.t == needs.s.outputs.first_key }}
+        run: |
+          {
+            echo "## \`${TARGET}\`"
+            echo ""
+            echo "### 🔧 二进制可执行文件校验"
+            echo "| 文件 | 大小 | SHA256 | SHA512 |"
+            echo "|---|---|---|---|"
+            for f in dist/*; do
+              fname=$(basename "$f")
+              B_SIZE=$(ls -lh "$f" | awk '{print $5}')
+              B_S256=$(sha256sum "$f" | awk '{print $1}')
+              B_S512=$(sha512sum "$f" | awk '{print $1}')
+              echo "| \`${fname}\` | ${B_SIZE} | \`${B_S256}\` | \`${B_S512}\` |"
+            done
+          } >> $GITHUB_STEP_SUMMARY
+
+          if [[ "$IS_FIRST" == "true" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 💡 工具帮助信息" >> $GITHUB_STEP_SUMMARY
+            for f in dist/*; do
+              fname=$(basename "$f")
+              HELP=$("$f" --help 2>&1 || true)
+              {
+                echo "<details><summary><code>${fname} --help</code></summary>"
+                echo ""
+                echo '```'
+                echo "$HELP"
+                echo '```'
+                echo "</details>"
+              } >> $GITHUB_STEP_SUMMARY
+            done
+          fi
+
+      - name: 打包
+        env:
+          TARGET: ${{ matrix.t }}
+        run: |
+          tar -cJf "dropbear-${TARGET}.tar.xz" -C dist .
+          sha256sum "dropbear-${TARGET}.tar.xz" | tee "dropbear-${TARGET}.tar.xz.SHA256"
+
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: dropbear-${{ matrix.target }}
-          overwrite: true
+          name: dropbear-${{ matrix.t }}
           path: |
-            dropbear-${{ matrix.target }}.tar.xz
-            dropbear-${{ matrix.target }}.tar.xz.SHA256
+            dropbear-${{ matrix.t }}.tar.xz
+            dropbear-${{ matrix.t }}.tar.xz.SHA256
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    name: 发布 Release
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - name: Download all artifacts
+      - name: 下载所有产物
         uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Create GitHub Release
+      - name: 发布
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
