@@ -113,7 +113,7 @@ jobs:
           export AR="${TC}-ar"
           export RANLIB="${TC}-ranlib"
           export STRIP="${TC}-strip"
-          export CFLAGS="-O3"
+          export CFLAGS="-Os"
           export PKG_CONFIG="false"
           export MSGFMT="$(which msgfmt)"
           export MSGMERGE="$(which msgmerge)"
