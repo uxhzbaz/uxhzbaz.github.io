@@ -2,7 +2,7 @@ name: Build Dropbear
 run-name: ${{ github.event.inputs.run_name || github.actor }}
 on:
   push:
-    tags: ["v*"]
+    tags: ["dropbear-*"]
   workflow_dispatch:
     inputs:
       run_name:
@@ -27,6 +27,7 @@ permissions:
 
 env:
   JOBS: 8
+  ZIG_VERSION: '0.16.0'
 
 jobs:
   s:
@@ -36,24 +37,11 @@ jobs:
       matrix: ${{ steps.p.outputs.matrix }}
       first_key: ${{ steps.p.outputs.first_key }}
       source_url: ${{ steps.p.outputs.source_url }}
-      zig_x86_64_url: ${{ steps.zig.outputs.zig_x86_64_url }}
-      zig_aarch64_url: ${{ steps.zig.outputs.zig_aarch64_url }}
-      zig_version: ${{ steps.zig.outputs.zig_version }}
+      dropbear_version: ${{ steps.p.outputs.dropbear_version }}
       do_release: ${{ steps.p.outputs.do_release }}
     steps:
-      - id: zig
-        name: 获取 Zig 最新 dev URL
-        run: |
-          index=$(curl -fsSL https://ziglang.org/download/index.json)
-          x86_url=$(echo "$index" | jq -r '.master["x86_64-linux"].tarball')
-          arm_url=$(echo "$index" | jq -r '.master["aarch64-linux"].tarball')
-          ver=$(echo "$index" | jq -r '.master.version')
-          echo "zig_x86_64_url=$x86_url" >> $GITHUB_OUTPUT
-          echo "zig_aarch64_url=$arm_url" >> $GITHUB_OUTPUT
-          echo "zig_version=$ver" >> $GITHUB_OUTPUT
-
       - id: p
-        name: 解析三元组
+        name: 解析参数
         shell: bash
         env:
           TARGETS: ${{ github.event.inputs.targets || 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi' }}
@@ -62,13 +50,20 @@ jobs:
         run: |
           include='[]'
           first_key=''
+
+          # 从 URL 提取版本号
+          url="$SOURCE_URL"
+          ver="${url##*/DROPBEAR_}"
+          ver="${ver%.tar.gz}"; ver="${ver%.tar.xz}"; ver="${ver%.tgz}"
+          echo "dropbear_version=$ver" >> $GITHUB_OUTPUT
+          echo "source_url=$SOURCE_URL" >> $GITHUB_OUTPUT
+
           IFS=',' read -ra TS <<< "$TARGETS"
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
             case "$t" in
-              i686-linux-musl) zig_target="x86-linux-musl"  ;;
-              i686-*)          zig_target="x86-${t#i686-}"  ;;
-              *)               zig_target="$t"              ;;
+              i686-*)   zig_target="x86-${t#i686-}"  ;;
+              *)        zig_target="$t"               ;;
             esac
             case "$t" in
               *aarch64*) runner="ubuntu-24.04-arm" ; zig_arch="aarch64" ;;
@@ -81,9 +76,10 @@ jobs:
               <<< "$include")
             [[ -z "$first_key" ]] && first_key="$t"
           done
+
           echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
           echo "first_key=$first_key" >> $GITHUB_OUTPUT
-          echo "source_url=$SOURCE_URL" >> $GITHUB_OUTPUT
+
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             echo "do_release=true" >> $GITHUB_OUTPUT
           else
@@ -109,31 +105,31 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/zig
-          key: zig-${{ matrix.zig_arch }}-${{ needs.s.outputs.zig_version }}
+          key: zig-${{ matrix.zig_arch }}-${{ env.ZIG_VERSION }}
 
       - name: 下载 Zig
         if: steps.cache-zig.outputs.cache-hit != 'true'
         run: |
-          if [[ "${{ matrix.zig_arch }}" == "aarch64" ]]; then
-            ZIG_URL="${{ needs.s.outputs.zig_aarch64_url }}"
-          else
-            ZIG_URL="${{ needs.s.outputs.zig_x86_64_url }}"
-          fi
+          # 0.14.1+ 格式: zig-{arch}-{os}-{version}.tar.xz
+          ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/zig-${{ matrix.zig_arch }}-linux-${ZIG_VERSION}.tar.xz"
+          echo "Downloading Zig from $ZIG_URL"
           curl -fsSL --retry 3 --retry-delay 5 "$ZIG_URL" -o zig.tar.xz
           mkdir -p "${{ github.workspace }}/zig"
           tar -xJf zig.tar.xz -C "${{ github.workspace }}/zig" --strip-components=1
+          "${{ github.workspace }}/zig/zig" version
 
-      - name: 构建
+      - name: 构建 dropbearmulti
         env:
           TARGET: ${{ matrix.t }}
           ZIG_TARGET: ${{ matrix.zig_target }}
           SOURCE_URL: ${{ needs.s.outputs.source_url }}
+          DROPBEAR_VERSION: ${{ needs.s.outputs.dropbear_version }}
         run: |
           set -ev
           workdir="$(pwd)"
           ZIG_BIN="${{ github.workspace }}/zig/zig"
           export PATH="${{ github.workspace }}/zig:$PATH"
-          echo "Zig $("$ZIG_BIN" version) | target=$TARGET | zig_target=$ZIG_TARGET"
+          echo "Zig $("$ZIG_BIN" version) | $TARGET (zig: $ZIG_TARGET)"
 
           EXT="${SOURCE_URL##*.}"
           curl -fsSL --retry 3 --retry-delay 5 "$SOURCE_URL" -o "src.tar.${EXT}"
@@ -141,8 +137,8 @@ jobs:
           tar -xf "src.tar.${EXT}" -C src --strip-components=1
           cd src
 
-          autoconf 2>/dev/null || true
-          autoheader 2>/dev/null || true
+          autoconf
+          autoheader
 
           CC="${ZIG_BIN} cc -target ${ZIG_TARGET}" \
           CFLAGS="-Os -fno-pie" \
@@ -155,25 +151,25 @@ jobs:
             --enable-bundled-libtom \
             --enable-static
 
-          # 文档要求：MULTI=1 前必须 make clean
-          make clean 2>/dev/null || true
-
+          # 先 make clean 再 MULTI=1 编译（文档要求）
+          make clean
           make -j"${JOBS}" \
             PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" \
-            MULTI=1 \
-            STATIC=1
+            STATIC=1 \
+            MULTI=1
 
           [[ -x ./dropbearmulti ]] || { echo "::error::编译失败: dropbearmulti 不存在"; exit 1; }
 
           strip ./dropbearmulti 2>/dev/null || true
 
+          # 收集产物
           mkdir -p "${workdir}/dist"
-          cp ./dropbearmulti "${workdir}/dist/"
+          cp ./dropbearmulti "${workdir}/dist/dropbearmulti"
 
-          # 创建软链接
+          # 建立符号链接
           cd "${workdir}/dist"
-          for prog in dropbear dbclient dropbearkey dropbearconvert scp; do
-            ln -sf dropbearmulti "$prog"
+          for tool in dropbear dbclient dropbearkey dropbearconvert scp; do
+            ln -sf dropbearmulti "$tool"
           done
 
       - name: 验证静态链接
@@ -185,6 +181,7 @@ jobs:
       - name: 生成摘要
         env:
           TARGET: ${{ matrix.t }}
+          DROPBEAR_VERSION: ${{ needs.s.outputs.dropbear_version }}
           IS_FIRST: ${{ matrix.t == needs.s.outputs.first_key }}
         run: |
           f="dist/dropbearmulti"
@@ -192,24 +189,24 @@ jobs:
           B_S256=$(sha256sum "$f" | awk '{print $1}')
           B_S512=$(sha512sum "$f" | awk '{print $1}')
           {
-            echo "## \`${TARGET}\`"
+            echo "## \`dropbear-${DROPBEAR_VERSION}-${TARGET}\`"
             echo ""
             echo "### 🔧 二进制可执行文件校验"
             echo "| 文件 | 大小 | SHA256 | SHA512 |"
             echo "|---|---|---|---|"
             echo "| \`dropbearmulti\` | ${B_SIZE} | \`${B_S256}\` | \`${B_S512}\` |"
             echo ""
-            echo "### 🔗 软链接"
-            echo "\`dropbear\` \`dbclient\` \`dropbearkey\` \`dropbearconvert\` \`scp\` → \`dropbearmulti\`"
+            echo "### 🔗 包含的工具（符号链接到 dropbearmulti）"
+            echo "\`dropbear\` \`dbclient\` \`dropbearkey\` \`dropbearconvert\` \`scp\`"
           } >> $GITHUB_STEP_SUMMARY
 
           if [[ "$IS_FIRST" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 💡 工具帮助信息" >> $GITHUB_STEP_SUMMARY
-            for prog in dropbear dbclient dropbearkey dropbearconvert scp; do
-              HELP=$(dist/dropbearmulti --help 2>&1 || true)
+            for tool in dropbear dbclient dropbearkey dropbearconvert; do
+              HELP=$(dist/dropbearmulti $tool --help 2>&1 || true)
               {
-                echo "<details><summary><code>${prog} --help</code></summary>"
+                echo "<details><summary><code>dropbearmulti $tool --help</code></summary>"
                 echo ""
                 echo '```'
                 echo "$HELP"
@@ -222,17 +219,20 @@ jobs:
       - name: 打包
         env:
           TARGET: ${{ matrix.t }}
+          DROPBEAR_VERSION: ${{ needs.s.outputs.dropbear_version }}
         run: |
-          tar -cJf "dropbear-${TARGET}.tar.xz" -C dist .
-          sha256sum "dropbear-${TARGET}.tar.xz" | tee "dropbear-${TARGET}.tar.xz.SHA256"
+          PKG="dropbear-${DROPBEAR_VERSION}-${TARGET}.tar.xz"
+          tar -cJf "$PKG" -C dist .
+          sha256sum "$PKG" | tee "${PKG}.SHA256"
+          echo "打包: $PKG ($(ls -lh "$PKG" | awk '{print $5}'))"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: dropbear-${{ matrix.t }}
+          name: dropbear-${{ needs.s.outputs.dropbear_version }}-${{ matrix.t }}
           path: |
-            dropbear-${{ matrix.t }}.tar.xz
-            dropbear-${{ matrix.t }}.tar.xz.SHA256
+            dropbear-${{ needs.s.outputs.dropbear_version }}-${{ matrix.t }}.tar.xz
+            dropbear-${{ needs.s.outputs.dropbear_version }}-${{ matrix.t }}.tar.xz.SHA256
 
   release:
     name: 发布 Release
@@ -249,9 +249,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          name: dropbear-${{ needs.s.outputs.dropbear_version }}
           files: |
-            dist/**/dropbear-*.tar.xz
-            dist/**/dropbear-*.tar.xz.SHA256
+            dist/**/*.tar.xz
+            dist/**/*.tar.xz.SHA256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
