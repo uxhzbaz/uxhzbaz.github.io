@@ -113,36 +113,17 @@ jobs:
           export AR="${TC}-ar"
           export RANLIB="${TC}-ranlib"
           export STRIP="${TC}-strip"
+          export CFLAGS="-Os"
           export PKG_CONFIG="false"
           export MSGFMT="$(which msgfmt)"
           export MSGMERGE="$(which msgmerge)"
           export XGETTEXT="$(which xgettext)"
-
           cd src
-
-          # aarch64 专用高性能优化，其余目标保留原简洁旗
-          if [[ "$TC" == "aarch64-unknown-linux-musl" ]]; then
-            CFLAGS="-O3 -march=armv8.2-a+crc+aes+sha2+dotprod -mtune=cortex-a72 -fPIE -flto=thin -D_FORTIFY_SOURCE=2 -ftree-vectorize -ffunction-sections -fdata-sections -fstack-protector-strong"
-            LDFLAGS="-static -flto=thin -Wl,-s -Wl,--gc-sections -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack -Wl,--as-needed -Wl,-O3"
-          else
-            CFLAGS="-Os"
-            LDFLAGS="-static"
-          fi
-
-          export CFLAGS
-          export LDFLAGS
-
-          ./configure \
+          LDFLAGS="-static" ./configure \
             --host="${TC}" \
             --prefix=/usr \
-            --enable-threads \
-            --disable-small \
-            --disable-nls \
-            --disable-shared \
-            --enable-static \
             --disable-dependency-tracking \
             ${{ github.event.inputs.configure_args }}
-
           make -j$(nproc) LDFLAGS="-all-static"
           make install DESTDIR="$INST"
 
