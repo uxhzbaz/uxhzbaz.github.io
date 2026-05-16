@@ -15,7 +15,7 @@ on:
         required: true
       targets:
         description: '目标三元组，逗号分隔'
-        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
+        default: 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi'
         required: true
 
 permissions:
@@ -54,7 +54,7 @@ jobs:
         name: 解析三元组
         shell: bash
         env:
-          TARGETS: ${{ github.event.inputs.targets || 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi' }}
+          TARGETS: ${{ github.event.inputs.targets || 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,arm-linux-musleabi' }}
           SOURCE_URL: ${{ github.event.inputs.source_url || 'https://github.com/mkj/dropbear/archive/refs/tags/DROPBEAR_2026.91.tar.gz' }}
         run: |
           include='[]'
@@ -90,15 +90,6 @@ jobs:
           packages: autoconf automake make
           version: 1.0
 
-      - name: 设置 Zig URL
-        id: zig_url
-        run: |
-          if [[ "${{ matrix.zig_arch }}" == "aarch64" ]]; then
-            echo "url=${{ needs.s.outputs.zig_aarch64_url }}" >> $GITHUB_OUTPUT
-          else
-            echo "url=${{ needs.s.outputs.zig_x86_64_url }}" >> $GITHUB_OUTPUT
-          fi
-
       - name: 缓存 Zig
         id: cache-zig
         uses: actions/cache@v4
@@ -109,44 +100,39 @@ jobs:
       - name: 下载 Zig
         if: steps.cache-zig.outputs.cache-hit != 'true'
         run: |
-          ZIG_URL="${{ steps.zig_url.outputs.url }}"
+          if [[ "${{ matrix.zig_arch }}" == "aarch64" ]]; then
+            ZIG_URL="${{ needs.s.outputs.zig_aarch64_url }}"
+          else
+            ZIG_URL="${{ needs.s.outputs.zig_x86_64_url }}"
+          fi
           echo "Downloading Zig from $ZIG_URL"
           curl -fsSL --retry 3 --retry-delay 5 "$ZIG_URL" -o zig.tar.xz
           mkdir -p "${{ github.workspace }}/zig"
           tar -xJf zig.tar.xz -C "${{ github.workspace }}/zig" --strip-components=1
-          "${{ github.workspace }}/zig/zig" version
 
-      - name: 下载并解压源码
+      - name: 构建
+        env:
+          TARGET: ${{ matrix.t }}
+          SOURCE_URL: ${{ needs.s.outputs.source_url }}
         run: |
-          SOURCE_URL="${{ needs.s.outputs.source_url }}"
+          set -ev
+          workdir="$(pwd)"
+          ZIG_BIN="${{ github.workspace }}/zig/zig"
+          export PATH="${{ github.workspace }}/zig:$PATH"
+          "${ZIG_BIN}" version
+
+          # 下载源码
           EXT="${SOURCE_URL##*.}"
           curl -fsSL --retry 3 --retry-delay 5 "$SOURCE_URL" -o "src.tar.${EXT}"
           mkdir -p src
           tar -xf "src.tar.${EXT}" -C src --strip-components=1
-
-      - name: 编译
-        env:
-          TARGET: ${{ matrix.t }}
-        run: |
-          ZIG_BIN="${{ github.workspace }}/zig/zig"
-          echo "Zig $("$ZIG_BIN" version) -> $TARGET"
-
-          WRAPPERS="${{ github.workspace }}/wrappers"
-          mkdir -p "$WRAPPERS"
-
-          printf '#!/bin/sh\nexec "%s" cc -target %s "$@"\n' "$ZIG_BIN" "$TARGET" > "$WRAPPERS/${TARGET}-gcc"
-          printf '#!/bin/sh\nexec "%s" c++ -target %s "$@"\n' "$ZIG_BIN" "$TARGET" > "$WRAPPERS/${TARGET}-g++"
-          printf '#!/bin/sh\nexec "%s" ar "$@"\n' "$ZIG_BIN" > "$WRAPPERS/${TARGET}-ar"
-          chmod +x "$WRAPPERS/${TARGET}-gcc" "$WRAPPERS/${TARGET}-g++" "$WRAPPERS/${TARGET}-ar"
-          export PATH="$WRAPPERS:$PATH"
-
           cd src
+
           autoconf 2>/dev/null || true
           autoheader 2>/dev/null || true
 
-          CC="${TARGET}-gcc" \
-          CXX="${TARGET}-g++" \
-          AR="${TARGET}-ar" \
+          # 与成功工作流相同：CC 直接赋值为带参数的完整命令
+          CC="${ZIG_BIN} cc -target ${TARGET}" \
           CFLAGS="-Os -fno-pie" \
           LDFLAGS="-static -no-pie" \
           CPPFLAGS="-DDROPBEAR_X11FWD" \
@@ -164,18 +150,14 @@ jobs:
           [[ -x ./dropbear ]] || { echo "::error::编译失败"; exit 1; }
 
           for bin in dropbear dbclient dropbearkey dropbearconvert scp; do
-            [[ -f "./$bin" ]] && "$ZIG_BIN" objcopy --strip-all "./$bin" 2>/dev/null || true
+            [[ -f "./$bin" ]] && strip "./$bin" 2>/dev/null || true
           done
 
-      - name: 收集产物
-        env:
-          TARGET: ${{ matrix.t }}
-        run: |
-          mkdir -p dist
+          # 打包
+          mkdir -p "${workdir}/dist"
           for bin in dropbear dbclient dropbearkey dropbearconvert scp; do
-            [[ -x "src/$bin" ]] && cp "src/$bin" "dist/$bin"
+            [[ -x "./$bin" ]] && cp "./$bin" "${workdir}/dist/"
           done
-          echo "产物:"; ls -lh dist/
 
       - name: 验证静态链接
         run: |
