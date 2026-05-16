@@ -51,9 +51,6 @@ jobs:
           echo "zig_x86_64_url=$x86_url" >> $GITHUB_OUTPUT
           echo "zig_aarch64_url=$arm_url" >> $GITHUB_OUTPUT
           echo "zig_version=$ver" >> $GITHUB_OUTPUT
-          echo "x86_64: $x86_url"
-          echo "aarch64: $arm_url"
-          echo "version: $ver"
 
       - id: p
         name: 解析三元组
@@ -68,11 +65,10 @@ jobs:
           IFS=',' read -ra TS <<< "$TARGETS"
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
-            # zig 用 x86 而不是 i686，做映射
             case "$t" in
-              i686-linux-musl)   zig_target="x86-linux-musl"   ;;
-              i686-*)            zig_target="x86-${t#i686-}"    ;;
-              *)                 zig_target="$t"                ;;
+              i686-linux-musl) zig_target="x86-linux-musl"  ;;
+              i686-*)          zig_target="x86-${t#i686-}"  ;;
+              *)               zig_target="$t"              ;;
             esac
             case "$t" in
               *aarch64*) runner="ubuntu-24.04-arm" ; zig_arch="aarch64" ;;
@@ -88,7 +84,6 @@ jobs:
           echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
           echo "first_key=$first_key" >> $GITHUB_OUTPUT
           echo "source_url=$SOURCE_URL" >> $GITHUB_OUTPUT
-          # tag push 时强制发布
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             echo "do_release=true" >> $GITHUB_OUTPUT
           else
@@ -124,7 +119,6 @@ jobs:
           else
             ZIG_URL="${{ needs.s.outputs.zig_x86_64_url }}"
           fi
-          echo "Downloading Zig from $ZIG_URL"
           curl -fsSL --retry 3 --retry-delay 5 "$ZIG_URL" -o zig.tar.xz
           mkdir -p "${{ github.workspace }}/zig"
           tar -xJf zig.tar.xz -C "${{ github.workspace }}/zig" --strip-components=1
@@ -150,8 +144,6 @@ jobs:
           autoconf 2>/dev/null || true
           autoheader 2>/dev/null || true
 
-          # CC 传带参数的完整字符串（与原成功工作流相同做法）
-          # --host 用用户指定的原始三元组，zig_target 仅用于 -target 参数
           CC="${ZIG_BIN} cc -target ${ZIG_TARGET}" \
           CFLAGS="-Os -fno-pie" \
           LDFLAGS="-static -no-pie" \
@@ -163,58 +155,61 @@ jobs:
             --enable-bundled-libtom \
             --enable-static
 
+          # 文档要求：MULTI=1 前必须 make clean
+          make clean 2>/dev/null || true
+
           make -j"${JOBS}" \
             PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" \
+            MULTI=1 \
             STATIC=1
 
-          [[ -x ./dropbear ]] || { echo "::error::编译失败"; exit 1; }
+          [[ -x ./dropbearmulti ]] || { echo "::error::编译失败: dropbearmulti 不存在"; exit 1; }
 
-          for bin in dropbear dbclient dropbearkey dropbearconvert scp; do
-            [[ -f "./$bin" ]] && strip "./$bin" 2>/dev/null || true
-          done
+          strip ./dropbearmulti 2>/dev/null || true
 
           mkdir -p "${workdir}/dist"
-          for bin in dropbear dbclient dropbearkey dropbearconvert scp; do
-            [[ -x "./$bin" ]] && cp "./$bin" "${workdir}/dist/"
+          cp ./dropbearmulti "${workdir}/dist/"
+
+          # 创建软链接
+          cd "${workdir}/dist"
+          for prog in dropbear dbclient dropbearkey dropbearconvert scp; do
+            ln -sf dropbearmulti "$prog"
           done
 
       - name: 验证静态链接
         run: |
-          fail=0
-          for f in dist/*; do
-            file "$f"
-            file "$f" | grep -q "statically linked" || { echo "::error::$f 未静态链接"; fail=1; }
-          done
-          [[ $fail -eq 0 ]] || exit 1
+          file dist/dropbearmulti
+          file dist/dropbearmulti | grep -q "statically linked" || \
+            { echo "::error::dropbearmulti 未静态链接"; exit 1; }
 
       - name: 生成摘要
         env:
           TARGET: ${{ matrix.t }}
           IS_FIRST: ${{ matrix.t == needs.s.outputs.first_key }}
         run: |
+          f="dist/dropbearmulti"
+          B_SIZE=$(ls -lh "$f" | awk '{print $5}')
+          B_S256=$(sha256sum "$f" | awk '{print $1}')
+          B_S512=$(sha512sum "$f" | awk '{print $1}')
           {
             echo "## \`${TARGET}\`"
             echo ""
             echo "### 🔧 二进制可执行文件校验"
             echo "| 文件 | 大小 | SHA256 | SHA512 |"
             echo "|---|---|---|---|"
-            for f in dist/*; do
-              fname=$(basename "$f")
-              B_SIZE=$(ls -lh "$f" | awk '{print $5}')
-              B_S256=$(sha256sum "$f" | awk '{print $1}')
-              B_S512=$(sha512sum "$f" | awk '{print $1}')
-              echo "| \`${fname}\` | ${B_SIZE} | \`${B_S256}\` | \`${B_S512}\` |"
-            done
+            echo "| \`dropbearmulti\` | ${B_SIZE} | \`${B_S256}\` | \`${B_S512}\` |"
+            echo ""
+            echo "### 🔗 软链接"
+            echo "\`dropbear\` \`dbclient\` \`dropbearkey\` \`dropbearconvert\` \`scp\` → \`dropbearmulti\`"
           } >> $GITHUB_STEP_SUMMARY
 
           if [[ "$IS_FIRST" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 💡 工具帮助信息" >> $GITHUB_STEP_SUMMARY
-            for f in dist/*; do
-              fname=$(basename "$f")
-              HELP=$("$f" --help 2>&1 || true)
+            for prog in dropbear dbclient dropbearkey dropbearconvert scp; do
+              HELP=$(dist/dropbearmulti --help 2>&1 || true)
               {
-                echo "<details><summary><code>${fname} --help</code></summary>"
+                echo "<details><summary><code>${prog} --help</code></summary>"
                 echo ""
                 echo '```'
                 echo "$HELP"
