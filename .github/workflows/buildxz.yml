@@ -119,7 +119,7 @@ jobs:
           export MSGMERGE="$(which msgmerge)"
           export XGETTEXT="$(which xgettext)"
           cd src
-          LDFLAGS="-static" ./configure \
+          LDFLAGS="-static" ./configure --disable-maintainer-mode \
             --host="${TC}" \
             --prefix=/usr \
             --disable-dependency-tracking \
