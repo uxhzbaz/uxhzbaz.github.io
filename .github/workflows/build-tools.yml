@@ -1,0 +1,239 @@
+name: build cross-compile tools
+run-name: ${{ github.event.inputs.run_name || github.actor }}
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: '工作流运行名称'
+        default: ''
+        required: false
+      tool_name:
+        description: '工具名称 (例如: xz, make, tar)'
+        default: 'xz'
+        required: true
+      tool_version:
+        description: '工具版本 (用于打包命名，例如: 5.8.3)'
+        default: '5.8.3'
+        required: true
+      source_url:
+        description: '源码包URL (.tar.gz / .tar.xz / .zip 等)'
+        default: 'https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.xz'
+        required: true
+      targets:
+        description: '目标三元组，逗号分隔 (需要与工具链前缀一致)'
+        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
+        required: true
+      build_command:
+        description: '自定义完整编译命令 (在 src 目录下执行，可使用 $TC, $INST 等环境变量)'
+        default: |
+          ./configure --host="${TC}" --prefix=/usr --disable-dependency-tracking --disable-shared --enable-static LDFLAGS="-static"
+          make -j$(nproc) LDFLAGS="-all-static"
+          make install DESTDIR="${INST}"
+        required: true
+
+env:
+  TOOLCHAIN_TAG: '20260430'
+  TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20260430'
+
+jobs:
+  s:
+    name: 解析参数
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.p.outputs.matrix }}
+      first_key: ${{ steps.p.outputs.first_key }}
+    steps:
+      - id: p
+        shell: bash
+        env:
+          TARGETS: ${{ github.event.inputs.targets }}
+        run: |
+          include='[]'
+          first_key=''
+          IFS=',' read -ra TS <<< "$TARGETS"
+          for t in "${TS[@]}"; do
+            t="${t# }"; t="${t% }"
+            if [[ -z "$t" ]]; then continue; fi
+            
+            tc_triple="$t"
+            tc_url="${TOOLCHAIN_BASE}/${tc_triple}.tar.xz"
+            
+            include=$(jq \
+              --arg t "$t" --arg tc_triple "$tc_triple" --arg tc_url "$tc_url" \
+              '. += [{"t":$t,"tc_triple":$tc_triple,"tc_url":$tc_url}]' \
+              <<< "$include")
+            [[ -z "$first_key" ]] && first_key="$t"
+          done
+          echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
+          echo "first_key=$first_key" >> $GITHUB_OUTPUT
+
+  build:
+    needs: s
+    name: ${{ matrix.t }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
+    steps:
+      - name: 安装构建依赖
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: gettext
+          version: 1.0
+
+      - name: 缓存工具链
+        id: cache-tc
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/toolchain
+          key: musl-toolchain-${{ matrix.tc_triple }}-${{ env.TOOLCHAIN_TAG }}
+
+      - name: 下载并解压工具链
+        if: steps.cache-tc.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.tar.xz
+          mkdir -p "${{ github.workspace }}/toolchain"
+          tar -xf toolchain.tar.xz -C "${{ github.workspace }}/toolchain" --strip-components=1
+
+      - name: 下载并解压源码
+        run: |
+          URL="${{ github.event.inputs.source_url }}"
+          curl -fsSL --retry 3 --retry-delay 5 "$URL" -o src_archive
+          mkdir -p src
+          if file src_archive | grep -q 'Zip archive'; then
+            unzip -q src_archive -d src_tmp
+            mv src_tmp/*/* src/ || mv src_tmp/* src/
+          else
+            tar -xf src_archive -C src --strip-components=1
+          fi
+
+      - name: 编译并安装
+        run: |
+          export TC="${{ matrix.tc_triple }}"
+          export INST="${{ github.workspace }}/install"
+          export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
+          export CC="${TC}-gcc"
+          export CXX="${TC}-g++"
+          export AR="${TC}-ar"
+          export RANLIB="${TC}-ranlib"
+          export STRIP="${TC}-strip"
+          export CFLAGS="-Os"
+          export PKG_CONFIG="false"
+          export MSGFMT="$(which msgfmt)"
+          export MSGMERGE="$(which msgmerge)"
+          export XGETTEXT="$(which xgettext)"
+          
+          mkdir -p "$INST"
+          cd src
+          
+          # 执行自定义的编译命令
+          ${{ github.event.inputs.build_command }}
+
+      - name: 收集产物
+        run: |
+          TARGET="${{ matrix.t }}"
+          TC="${{ matrix.tc_triple }}"
+          INST="${{ github.workspace }}/install"
+          STRIP_BIN="${{ github.workspace }}/toolchain/bin/${TC}-strip"
+          mkdir -p dist
+
+          # ELF 可执行二进制
+          while IFS= read -r -d '' f; do
+            file "$f" | grep -qE 'ELF.*executable' || continue
+            fname=$(basename "$f")
+            "$STRIP_BIN" "$f" 2>/dev/null || true
+            cp "$f" "dist/${fname}"
+          done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
+
+          # shell 脚本
+          while IFS= read -r -d '' f; do
+            file "$f" | grep -qiE 'shell script|text' || continue
+            fname=$(basename "$f")
+            cp "$f" "dist/${fname}"
+          done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
+
+          echo "产物列表:"
+          find dist -type f | sort
+
+      - name: 验证静态链接
+        run: |
+          fail=0
+          while IFS= read -r -d '' f; do
+            file "$f" | grep -qE 'ELF.*executable' || continue
+            if ! file "$f" | grep -q "statically linked"; then
+              echo "::error::$f 未静态链接: $(file "$f")"
+              fail=1
+            else
+              echo "OK: $(basename "$f") - statically linked"
+            fi
+          done < <(find dist -maxdepth 1 -type f -print0)
+          [[ $fail -eq 0 ]] || exit 1
+
+      - name: 打包产物
+        run: |
+          TARGET="${{ matrix.t }}"
+          TOOL_NAME="${{ github.event.inputs.tool_name }}"
+          TOOL_VERSION="${{ github.event.inputs.tool_version }}"
+          PKG_NAME="${TOOL_NAME}-${TOOL_VERSION}-${TARGET}"
+          
+          tar -cJf "${PKG_NAME}.tar.xz" -C dist .
+          sha256sum "${PKG_NAME}.tar.xz" > "${PKG_NAME}.tar.xz.sha256"
+          
+          echo "打包完毕: ${PKG_NAME}.tar.xz ($(ls -lh "${PKG_NAME}.tar.xz" | awk '{print $5}'))"
+
+      - name: 上传产物至 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}-${{ matrix.t }}
+          path: |
+            *.tar.xz
+            *.tar.xz.sha256
+
+  release:
+    needs: build
+    name: 发布至 Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write 
+    steps:
+      - name: 下载所有的构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: "*"
+          merge-multiple: true
+
+      - name: 收集校验和并生成 RELEASE.md
+        run: |
+          echo "### 📦 产物及校验和" > RELEASE.md
+          echo "" >> RELEASE.md
+          echo "| 文件名 | SHA256 |" >> RELEASE.md
+          echo "| -------- | --------- |" >> RELEASE.md
+          for i in release/*.sha256; do
+            HASH=$(awk '{print $1}' "$i")
+            FILENAME=$(basename "$i" .sha256)
+            echo "| \`${FILENAME}\` | \`${HASH}\` |" >> RELEASE.md
+          done
+          
+          echo "生成的 Release Notes 内容："
+          cat RELEASE.md
+
+      - name: 推送构建产物到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 自动拼接 release 标签为 工具名-版本
+          TAG_NAME: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}
+          TOOL_NAME: ${{ github.event.inputs.tool_name }}
+          TOOL_VERSION: ${{ github.event.inputs.tool_version }}
+        run: |
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "创建新的 Release: $TAG_NAME"
+            gh release create "$TAG_NAME" --title "$TOOL_NAME $TOOL_VERSION" -F RELEASE.md
+          fi
+
+          for i in release/*.tar.xz; do
+            echo "正在上传 $i"
+            gh release upload "$TAG_NAME" "$i" "${i}.sha256" --clobber
+          done
+
+          gh release edit "$TAG_NAME" -F RELEASE.md
