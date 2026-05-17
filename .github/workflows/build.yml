@@ -15,8 +15,8 @@ on:
         default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
       l:
         description: 'cargo build --locked (true/false)'
-        default: 'true'
-        required: false
+        default: 'false'
+        required: true
       n:
         description: '打包的二进制名称，逗号分隔（留空自动检测，支持通配符）'
         default: ''
