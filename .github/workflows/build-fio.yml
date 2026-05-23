@@ -33,21 +33,18 @@ jobs:
           export AR=llvm-ar
           export RANLIB=llvm-ranlib
           export STRIP=llvm-strip
-          # 3. 精准打击性能参数（切换为全量 Full LTO，规避工具链 Bug）
-          EXTRA_CFLAGS="-O3 -march=armv9-a+crypto+bf16+i8mm -flto -fomit-frame-pointer"
-          EXTRA_LDFLAGS="-flto -pie"
+          # 3. 终极性能压榨参数（修复变量覆盖，激活激进优化）
+          EXTRA_CFLAGS="-O3 -march=armv9-a+crypto+bf16+i8mm -flto -funroll-loops -fomit-frame-pointer"
 
+          EXTRA_LDFLAGS="-flto -pie -Wl,-O2 -Wl,--icf=all"
 
-          # 链接器参数：负责 ThinLTO 的代码联动优化与最终可执行文件生成
-          EXTRA_LDFLAGS="-flto=thin -pie"
-
-          # 4. 配置与编译
           ./configure \
           --extra-cflags="$EXTRA_CFLAGS" \
           --extra-ldflags="$EXTRA_LDFLAGS" \
           --disable-shm
-  
+
           make -j$(nproc)
+
 
           
           # 5. 去除无用符号表
