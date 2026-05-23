@@ -1,0 +1,61 @@
+name: Build FIO (Max Performance for Snapdragon 8 Gen 3)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 安装编译基础依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison libaio-dev
+
+      - name: 下载并解压 FIO 3.42 源码
+        run: |
+          curl -L https://github.com/axboe/fio/archive/refs/tags/fio-3.42.tar.gz -o fio-3.42.tar.gz
+          tar -xzf fio-3.42.tar.gz
+          echo "SOURCE_DIR=fio-fio-3.42" >> $GITHUB_ENV
+
+      - name: 使用 Android NDK 压榨 ARMv9 性能编译
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          
+          # 1. 自动定位 GitHub 环境中最新的 NDK 
+          NDK_PATH=$ANDROID_NDK_LATEST_HOME
+          TOOLCHAIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin
+          export PATH=$TOOLCHAIN:$PATH
+          
+          # 2. 指定交叉编译工具链
+          export CC=aarch64-linux-android34-clang
+          export AR=llvm-ar
+          export RANLIB=llvm-ranlib
+          export STRIP=llvm-strip
+          
+          # 3. 极致性能编译参数（针对你的 CPU 特征精准打击）
+          # -O3: 开启最激进的循环向量化和代码优化
+          # -march=armv9-a+crypto+bf16+i8mm: 激活你日志里显示的 ARMv9 原生矩阵与加密硬加速
+          # -flto=thin: 开启轻量化全局链接时优化，打破文件壁垒内联函数，大幅提升运算效率
+          # -fomit-frame-pointer: 释放 X29 帧指针寄存器，让其作为通用寄存器参与运算
+          OPTIMIZATION_FLAGS="-O3 -march=armv9-a+crypto+bf16+i8mm -flto=thin -fomit-frame-pointer -pie"
+          
+          # 4. 配置与编译
+          ./configure \
+            --extra-cflags="$OPTIMIZATION_FLAGS" \
+            --disable-shm
+            
+          make -j$(nproc)
+          
+          # 5. 去除无用符号表
+          $STRIP fio
+          
+          # 验证架构和动态链接状态
+          file fio
+
+      - name: 上传终极性能版 FIO 二进制文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: fio-3.42-snapdragon8gen3-perf
+          path: ${{ env.SOURCE_DIR }}/fio
