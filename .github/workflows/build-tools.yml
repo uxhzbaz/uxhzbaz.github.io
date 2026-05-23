@@ -54,10 +54,10 @@ jobs:
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
             if [[ -z "$t" ]]; then continue; fi
-            
+
             tc_triple="$t"
             tc_url="${TOOLCHAIN_BASE}/${tc_triple}.tar.xz"
-            
+
             include=$(jq \
               --arg t "$t" --arg tc_triple "$tc_triple" --arg tc_url "$tc_url" \
               '. += [{"t":$t,"tc_triple":$tc_triple,"tc_url":$tc_url}]' \
@@ -122,11 +122,10 @@ jobs:
           export MSGFMT="$(which msgfmt)"
           export MSGMERGE="$(which msgmerge)"
           export XGETTEXT="$(which xgettext)"
-          
+
           mkdir -p "$INST"
           cd src
-          
-          # 执行自定义的编译命令
+
           ${{ github.event.inputs.build_command }}
 
       - name: 收集产物
@@ -175,10 +174,10 @@ jobs:
           TOOL_NAME="${{ github.event.inputs.tool_name }}"
           TOOL_VERSION="${{ github.event.inputs.tool_version }}"
           PKG_NAME="${TOOL_NAME}-${TOOL_VERSION}-${TARGET}"
-          
+
           tar -cJf "${PKG_NAME}.tar.xz" -C dist .
           sha256sum "${PKG_NAME}.tar.xz" > "${PKG_NAME}.tar.xz.sha256"
-          
+
           echo "打包完毕: ${PKG_NAME}.tar.xz ($(ls -lh "${PKG_NAME}.tar.xz" | awk '{print $5}'))"
 
       - name: 上传产物至 Artifact
@@ -194,7 +193,7 @@ jobs:
     name: 发布至 Release
     runs-on: ubuntu-latest
     permissions:
-      contents: write 
+      contents: write
     steps:
       - name: 下载所有的构建产物
         uses: actions/download-artifact@v4
@@ -214,14 +213,11 @@ jobs:
             FILENAME=$(basename "$i" .sha256)
             echo "| \`${FILENAME}\` | \`${HASH}\` |" >> RELEASE.md
           done
-          
-          echo "生成的 Release Notes 内容："
-          cat RELEASE.md
 
       - name: 推送构建产物到 Release
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 自动拼接 release 标签为 工具名-版本
           TAG_NAME: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}
           TOOL_NAME: ${{ github.event.inputs.tool_name }}
           TOOL_VERSION: ${{ github.event.inputs.tool_version }}
