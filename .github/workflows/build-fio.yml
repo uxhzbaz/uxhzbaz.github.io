@@ -33,20 +33,21 @@ jobs:
           export AR=llvm-ar
           export RANLIB=llvm-ranlib
           export STRIP=llvm-strip
-          
-          # 3. 极致性能编译参数（针对你的 CPU 特征精准打击）
-          # -O3: 开启最激进的循环向量化和代码优化
-          # -march=armv9-a+crypto+bf16+i8mm: 激活你日志里显示的 ARMv9 原生矩阵与加密硬加速
-          # -flto=thin: 开启轻量化全局链接时优化，打破文件壁垒内联函数，大幅提升运算效率
-          # -fomit-frame-pointer: 释放 X29 帧指针寄存器，让其作为通用寄存器参与运算
-          OPTIMIZATION_FLAGS="-O3 -march=armv9-a+crypto+bf16+i8mm -flto=thin -fomit-frame-pointer -pie"
-          
+          # 3. 精准打击性能参数（严格区分编译与链接阶段）
+          # 编译器参数：负责代码生成、向量化与硬件指令集加速
+          EXTRA_CFLAGS="-O3 -march=armv9-a+crypto+bf16+i8mm -flto=thin -fomit-frame-pointer"
+
+          # 链接器参数：负责 ThinLTO 的代码联动优化与最终可执行文件生成
+          EXTRA_LDFLAGS="-flto=thin -pie"
+
           # 4. 配置与编译
           ./configure \
-            --extra-cflags="$OPTIMIZATION_FLAGS" \
-            --disable-shm
-            
+          --extra-cflags="$EXTRA_CFLAGS" \
+          --extra-ldflags="$EXTRA_LDFLAGS" \
+          --disable-shm
+  
           make -j$(nproc)
+
           
           # 5. 去除无用符号表
           $STRIP fio
