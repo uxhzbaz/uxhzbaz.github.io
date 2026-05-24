@@ -110,6 +110,7 @@ jobs:
         run: |
           curl -fsSL https://github.com/hpjansson/chafa/releases/download/$VER/chafa-$VER.tar.xz | tar xJ
           cd chafa-$VER
+          sed -i 's/ctermid (dev_name)/strcpy(dev_name, "\/dev\/tty")/' tools/chafa/chicle-options.c
           ./configure \
             --host=$TRIPLE \
             --prefix=$GITHUB_WORKSPACE/output \
