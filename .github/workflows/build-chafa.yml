@@ -76,8 +76,7 @@ jobs:
           EOF
           meson setup build --cross-file cross.ini \
             --prefix=$P --default-library=static \
-            -Dtests=false -Dintrospection=disabled \
-            -Ddocumentation=false -Dselinux=disabled \
+            -Dtests=false -Dselinux=disabled \
             -Dlibmount=disabled -Dxattr=false
           ninja -C build && ninja -C build install
 
