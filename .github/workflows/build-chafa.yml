@@ -3,11 +3,16 @@ on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Chafa 版本'
+        default: '1.18.2'
+        required: true
 
 env:
   API: 24
   TRIPLE: aarch64-linux-android
-  VER: 1.18.2
+  VER: ${{ github.event.inputs.version || '1.18.2' }}
 
 jobs:
   build:
@@ -49,6 +54,7 @@ jobs:
           ./configure --host=$TRIPLE --prefix=$P --disable-shared \
             CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
           make -j$(nproc) && make install
+
       - name: Build libiconv
         run: |
           curl -fsSL https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz | tar xz
@@ -56,18 +62,9 @@ jobs:
           ./configure --host=$TRIPLE --prefix=$P --disable-shared \
             CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
           make -j$(nproc) && make install
-          cat > $P/lib/pkgconfig/iconv.pc << EOF
-          prefix=$P
-          libdir=\${prefix}/lib
-          includedir=\${prefix}/include
-          Name: iconv
-          Version: 1.17
-          Description: iconv
-          Libs: -L\${libdir} -liconv
-          Cflags: -I\${includedir}
-          EOF
           cp $P/lib/libiconv.a $TC/sysroot/usr/lib/aarch64-linux-android/
           cp $P/include/iconv.h $TC/sysroot/usr/include/
+
       - name: Build glib2
         run: |
           curl -fsSL https://download.gnome.org/sources/glib/2.78/glib-2.78.6.tar.xz | tar xJ
@@ -119,6 +116,7 @@ jobs:
             CFLAGS="--sysroot=$TC/sysroot -I$P/include" \
             LDFLAGS="--sysroot=$TC/sysroot -L$P/lib"
           make -j$(nproc) && make install
+
       - name: Build libtiff
         run: |
           curl -fsSL https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz | tar xz
@@ -126,14 +124,6 @@ jobs:
           ./configure --host=$TRIPLE --prefix=$P --disable-shared \
             CFLAGS="--sysroot=$TC/sysroot -I$P/include" \
             LDFLAGS="--sysroot=$TC/sysroot -L$P/lib"
-          make -j$(nproc) && make install
-      - name: Build freetype2
-        run: |
-          curl -fsSL https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz | tar xJ
-          cd freetype-2.13.3
-          ./configure --host=$TRIPLE --prefix=$P --disable-shared --enable-static \
-            --without-harfbuzz --without-png --without-bzip2 \
-            CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
           make -j$(nproc) && make install
 
       - name: Build Chafa
@@ -150,24 +140,20 @@ jobs:
             LDFLAGS="--sysroot=$TC/sysroot -L$P/lib"
           make -j$(nproc) && make install
           $STRIP $GITHUB_WORKSPACE/output/bin/chafa
-      - uses: actions/upload-artifact@v4
-        with:
-          name: chafa-${{ env.VER }}-android${{ env.API }}-arm64
-          path: output/
 
-      - name: 打包产物
+      - name: 打包
         run: |
-          PKG="chafa-${{ env.VER }}-${{ env.TRIPLE }}"
-          tar -cJf "${PKG}.tar.xz" -C $GITHUB_WORKSPACE/output .
-          sha256sum "${PKG}.tar.xz" > "${PKG}.tar.xz.sha256"
+          PKG="chafa-${{ env.VER }}-${{ env.TRIPLE }}.tar.xz"
+          tar -cJf "$PKG" -C $GITHUB_WORKSPACE/output .
+          sha256sum "$PKG" | tee "${PKG}.SHA256"
 
       - name: 上传产物至 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: chafa-${{ env.VER }}-${{ env.TRIPLE }}
           path: |
-            *.tar.xz
-            *.tar.xz.sha256
+            chafa-${{ env.VER }}-${{ env.TRIPLE }}.tar.xz
+            chafa-${{ env.VER }}-${{ env.TRIPLE }}.tar.xz.SHA256
 
   release:
     needs: build
@@ -177,33 +163,17 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: release
-          pattern: chafa-*
-          merge-multiple: true
+          path: dist
+          pattern: chafa-${{ env.VER }}-*
           run-id: ${{ github.run_id }}
 
-      - name: 生成 RELEASE.md
-        run: |
-          echo "### 📦 产物及校验和" > RELEASE.md
-          echo "" >> RELEASE.md
-          echo "| 文件名 | SHA256 |" >> RELEASE.md
-          echo "| -------- | --------- |" >> RELEASE.md
-          for i in release/*.sha256; do
-            HASH=$(awk '{print $1}' "$i")
-            FILENAME=$(basename "$i" .sha256)
-            echo "| \`${FILENAME}\` | \`${HASH}\` |" >> RELEASE.md
-          done
-
-      - name: 发布至 Release
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: chafa-${{ env.VER }}
+          name: chafa ${{ env.VER }}
+          generate_release_notes: false
+          files: |
+            dist/**/*.tar.xz
+            dist/**/*.tar.xz.SHA256
         env:
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: chafa-${{ env.VER }}
-        run: |
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "chafa ${{ env.VER }}" -F RELEASE.md
-          fi
-          for i in release/*.tar.xz; do
-            gh release upload "$TAG" "$i" "${i}.sha256" --clobber
-          done
-          gh release edit "$TAG" -F RELEASE.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
