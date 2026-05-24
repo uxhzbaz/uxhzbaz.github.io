@@ -1,0 +1,53 @@
+name: Cross-Compile Chafa
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-aarch64:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Multiarch and Install Toolchains
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y build-essential crossbuild-essential-arm64 pkg-config wget
+          sudo apt-get install -y \
+            libglib2.0-dev:arm64 \
+            libfreetype6-dev:arm64 \
+            libjpeg-dev:arm64 \
+            librsvg2-dev:arm64 \
+            libtiff-dev:arm64 \
+            libwebp-dev:arm64
+
+      - name: Download and Extract Chafa Release
+        run: |
+          wget https://github.com/hpjansson/chafa/releases/download/1.18.2/chafa-1.18.2.tar.xz
+          tar -xf chafa-1.18.2.tar.xz
+
+      - name: Configure and Build Chafa (aarch64)
+        run: |
+          cd chafa-1.18.2
+          export CC=aarch64-linux-gnu-gcc
+          export CXX=aarch64-linux-gnu-g++
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export PKG_CONFIG_SYSROOT_DIR=/
+          ./configure \
+            --host=aarch64-linux-gnu \
+            --prefix=$GITHUB_WORKSPACE/chafa-aarch64-output \
+            --with-sysroot=/
+          make -j$(nproc)
+          make install
+
+      - name: Archive and Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chafa-1.18.2-aarch64
+          path: chafa-aarch64-output/
