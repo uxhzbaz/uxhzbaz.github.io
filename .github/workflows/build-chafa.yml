@@ -97,6 +97,15 @@ jobs:
             -Dlibmount=disabled -Dxattr=false
           ninja -C build && ninja -C build install
 
+          - name: Build freetype2
+          run: |
+          curl -fsSL https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz | tar xJ
+          cd freetype-2.13.3
+          ./configure --host=$TRIPLE --prefix=$P --disable-shared --enable-static \
+            --without-harfbuzz --without-png --without-bzip2 \
+            CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
+          make -j$(nproc) && make install
+
       - name: Build Chafa
         run: |
           curl -fsSL https://github.com/hpjansson/chafa/releases/download/$VER/chafa-$VER.tar.xz | tar xJ
