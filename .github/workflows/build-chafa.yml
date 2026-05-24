@@ -154,3 +154,54 @@ jobs:
         with:
           name: chafa-${{ env.VER }}-android${{ env.API }}-arm64
           path: output/
+
+      - name: 打包产物
+        run: |
+          PKG="chafa-${{ env.VER }}-${{ env.TRIPLE }}"
+          tar -cJf "${PKG}.tar.xz" -C $GITHUB_WORKSPACE/output .
+          sha256sum "${PKG}.tar.xz" > "${PKG}.tar.xz.sha256"
+
+      - name: 上传产物至 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chafa-${{ env.VER }}-${{ env.TRIPLE }}
+          path: |
+            *.tar.xz
+            *.tar.xz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: 生成 RELEASE.md
+        run: |
+          echo "### 📦 产物及校验和" > RELEASE.md
+          echo "" >> RELEASE.md
+          echo "| 文件名 | SHA256 |" >> RELEASE.md
+          echo "| -------- | --------- |" >> RELEASE.md
+          for i in release/*.sha256; do
+            HASH=$(awk '{print $1}' "$i")
+            FILENAME=$(basename "$i" .sha256)
+            echo "| \`${FILENAME}\` | \`${HASH}\` |" >> RELEASE.md
+          done
+
+      - name: 发布至 Release
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: chafa-${{ env.VER }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "chafa ${{ env.VER }}" -F RELEASE.md
+          fi
+          for i in release/*.tar.xz; do
+            gh release upload "$TAG" "$i" "${i}.sha256" --clobber
+          done
+          gh release edit "$TAG" -F RELEASE.md
