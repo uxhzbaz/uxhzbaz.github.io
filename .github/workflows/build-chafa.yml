@@ -84,7 +84,6 @@ jobs:
           c_args = ['--sysroot=$TC/sysroot', '-I$P/include']
           c_link_args = ['--sysroot=$TC/sysroot', '-L$P/lib']
           [properties]
-          sys_root = '$TC/sysroot'
           pkg_config_libdir = '$P/lib/pkgconfig'
           [host_machine]
           system = 'android'
