@@ -66,6 +66,8 @@ jobs:
           Libs: -L\${libdir} -liconv
           Cflags: -I\${includedir}
           EOF
+          cp $P/lib/libiconv.a $TC/sysroot/usr/lib/aarch64-linux-android/
+          cp $P/include/iconv.h $TC/sysroot/usr/include/
       - name: Build glib2
         run: |
           curl -fsSL https://download.gnome.org/sources/glib/2.78/glib-2.78.6.tar.xz | tar xJ
