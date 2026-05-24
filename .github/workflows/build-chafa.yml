@@ -135,7 +135,6 @@ jobs:
             --without-harfbuzz --without-png --without-bzip2 \
             CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
           make -j$(nproc) && make install
-          $STRIP $GITHUB_WORKSPACE/output/bin/chafa
 
       - name: Build Chafa
         run: |
@@ -150,7 +149,7 @@ jobs:
             CFLAGS="--sysroot=$TC/sysroot -I$P/include" \
             LDFLAGS="--sysroot=$TC/sysroot -L$P/lib"
           make -j$(nproc) && make install
-
+          $STRIP $GITHUB_WORKSPACE/output/bin/chafa
       - uses: actions/upload-artifact@v4
         with:
           name: chafa-${{ env.VER }}-android${{ env.API }}-arm64
