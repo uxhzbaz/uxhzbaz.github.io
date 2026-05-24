@@ -1,65 +1,100 @@
-name: Cross-Compile Chafa
-
+name: Cross-Compile Chafa for Android API 24
 on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
 
+env:
+  API: 24
+  TRIPLE: aarch64-linux-android
+  VER: 1.18.2
+
 jobs:
-  build-aarch64:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Multiarch and Install Toolchains
+      - name: Setup NDK & Env
         run: |
-          sudo dpkg --add-architecture arm64
-          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-            sudo sed -i '/^Types: deb/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
-          fi
-          sudo tee /etc/apt/sources.list.d/arm64.sources << 'EOF'
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports
-          Suites: noble noble-updates noble-security noble-backports
-          Components: main universe restricted multiverse
-          Architectures: arm64
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          sudo apt-get install -y meson ninja-build
+          N=$(ls /usr/local/lib/android/sdk/ndk/ | sort -V | tail -1)
+          TC="/usr/local/lib/android/sdk/ndk/$N/toolchains/llvm/prebuilt/linux-x86_64"
+          P="$GITHUB_WORKSPACE/prefix"
+          mkdir -p "$P"
+          cat >> $GITHUB_ENV << EOF
+          TC=$TC
+          P=$P
+          CC=$TC/bin/${TRIPLE}${API}-clang
+          CXX=$TC/bin/${TRIPLE}${API}-clang++
+          AR=$TC/bin/llvm-ar
+          RANLIB=$TC/bin/llvm-ranlib
+          STRIP=$TC/bin/llvm-strip
+          PKG_CONFIG_PATH=$P/lib/pkgconfig
+          PKG_CONFIG_LIBDIR=$P/lib/pkgconfig
           EOF
-          sudo apt-get update
-          sudo apt-mark hold python3
-          sudo apt-get install -y build-essential crossbuild-essential-arm64 pkg-config wget
-          sudo apt-get install -y \
-            libglib2.0-dev:arm64 \
-            libfreetype6-dev:arm64 \
-            libjpeg-dev:arm64 \
-            librsvg2-dev:arm64 \
-            libtiff-dev:arm64 \
-            libwebp-dev:arm64
 
-      - name: Download and Extract Chafa Release
+      - name: Build pcre2
         run: |
-          wget https://github.com/hpjansson/chafa/releases/download/1.18.2/chafa-1.18.2.tar.xz
-          tar -xf chafa-1.18.2.tar.xz
+          curl -fsSL https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.45/pcre2-10.45.tar.gz | tar xz
+          cd pcre2-10.45
+          ./configure --host=$TRIPLE --prefix=$P --disable-shared \
+            CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
+          make -j$(nproc) && make install
 
-      - name: Configure and Build Chafa (aarch64)
+      - name: Build libffi
         run: |
-          cd chafa-1.18.2
-          export CC=aarch64-linux-gnu-gcc
-          export CXX=aarch64-linux-gnu-g++
-          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
-          export PKG_CONFIG_SYSROOT_DIR=/
+          curl -fsSL https://github.com/libffi/libffi/releases/download/v3.4.8/libffi-3.4.8.tar.gz | tar xz
+          cd libffi-3.4.8
+          ./configure --host=$TRIPLE --prefix=$P --disable-shared \
+            CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
+          make -j$(nproc) && make install
+
+      - name: Build glib2
+        run: |
+          curl -fsSL https://download.gnome.org/sources/glib/2.78/glib-2.78.6.tar.xz | tar xJ
+          cd glib-2.78.6
+          cat > cross.ini << EOF
+          [binaries]
+          c = '$TC/bin/${TRIPLE}${API}-clang'
+          cpp = '$TC/bin/${TRIPLE}${API}-clang++'
+          ar = '$TC/bin/llvm-ar'
+          ranlib = '$TC/bin/llvm-ranlib'
+          strip = '$TC/bin/llvm-strip'
+          pkg-config = 'pkg-config'
+          [built-in options]
+          c_args = ['--sysroot=$TC/sysroot', '-I$P/include']
+          c_link_args = ['--sysroot=$TC/sysroot', '-L$P/lib']
+          [properties]
+          sys_root = '$TC/sysroot'
+          pkg_config_libdir = '$P/lib/pkgconfig'
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+          EOF
+          meson setup build --cross-file cross.ini \
+            --prefix=$P --default-library=static \
+            -Dtests=false -Dintrospection=disabled \
+            -Ddocumentation=false -Dselinux=disabled \
+            -Dlibmount=disabled -Dxattr=false
+          ninja -C build && ninja -C build install
+
+      - name: Build Chafa
+        run: |
+          curl -fsSL https://github.com/hpjansson/chafa/releases/download/$VER/chafa-$VER.tar.xz | tar xJ
+          cd chafa-$VER
           ./configure \
-            --host=aarch64-linux-gnu \
-            --prefix=$GITHUB_WORKSPACE/chafa-aarch64-output \
-            --with-sysroot=/
-          make -j$(nproc)
-          make install
+            --host=$TRIPLE \
+            --prefix=$GITHUB_WORKSPACE/output \
+            --disable-shared --enable-static \
+            PKG_CONFIG_PATH=$P/lib/pkgconfig \
+            CFLAGS="--sysroot=$TC/sysroot -I$P/include" \
+            LDFLAGS="--sysroot=$TC/sysroot -L$P/lib"
+          make -j$(nproc) && make install
 
-      - name: Archive and Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: chafa-1.18.2-aarch64
-          path: chafa-aarch64-output/
+          name: chafa-${{ env.VER }}-android${{ env.API }}-arm64
+          path: output/
