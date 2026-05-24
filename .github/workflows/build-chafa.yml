@@ -180,6 +180,7 @@ jobs:
           path: release
           pattern: chafa-*
           merge-multiple: true
+          run-id: ${{ github.run_id }}
 
       - name: 生成 RELEASE.md
         run: |
