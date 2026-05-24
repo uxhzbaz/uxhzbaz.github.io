@@ -56,6 +56,16 @@ jobs:
           ./configure --host=$TRIPLE --prefix=$P --disable-shared \
             CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
           make -j$(nproc) && make install
+          cat > $P/lib/pkgconfig/iconv.pc << EOF
+          prefix=$P
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+          Name: iconv
+          Version: 1.17
+          Description: iconv
+          Libs: -L\${libdir} -liconv
+          Cflags: -I\${includedir}
+          EOF
       - name: Build glib2
         run: |
           curl -fsSL https://download.gnome.org/sources/glib/2.78/glib-2.78.6.tar.xz | tar xJ
