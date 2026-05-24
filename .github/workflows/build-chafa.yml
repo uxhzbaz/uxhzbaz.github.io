@@ -97,6 +97,34 @@ jobs:
             -Dlibmount=disabled -Dxattr=false
           ninja -C build && ninja -C build install
 
+      - name: Build libjpeg-turbo
+        run: |
+          curl -fsSL https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.0/libjpeg-turbo-3.1.0.tar.gz | tar xz
+          cd libjpeg-turbo-3.1.0
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=$TC/../../../../../../build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-$API \
+            -DCMAKE_INSTALL_PREFIX=$P \
+            -DENABLE_SHARED=OFF -DENABLE_STATIC=ON \
+            -DCMAKE_C_COMPILER=$CC
+          cmake --build build -j$(nproc) && cmake --install build
+
+      - name: Build libwebp
+        run: |
+          curl -fsSL https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.5.0.tar.gz | tar xz
+          cd libwebp-1.5.0
+          ./configure --host=$TRIPLE --prefix=$P --disable-shared \
+            CFLAGS="--sysroot=$TC/sysroot -I$P/include" \
+            LDFLAGS="--sysroot=$TC/sysroot -L$P/lib"
+          make -j$(nproc) && make install
+      - name: Build libtiff
+        run: |
+          curl -fsSL https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz | tar xz
+          cd tiff-4.7.0
+          ./configure --host=$TRIPLE --prefix=$P --disable-shared \
+            CFLAGS="--sysroot=$TC/sysroot -I$P/include" \
+            LDFLAGS="--sysroot=$TC/sysroot -L$P/lib"
+          make -j$(nproc) && make install
       - name: Build freetype2
         run: |
           curl -fsSL https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz | tar xJ
@@ -105,6 +133,7 @@ jobs:
             --without-harfbuzz --without-png --without-bzip2 \
             CFLAGS="--sysroot=$TC/sysroot" LDFLAGS="--sysroot=$TC/sysroot"
           make -j$(nproc) && make install
+          $STRIP $GITHUB_WORKSPACE/output/bin/chafa
 
       - name: Build Chafa
         run: |
