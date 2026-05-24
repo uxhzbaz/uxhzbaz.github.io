@@ -1,5 +1,5 @@
 name: build cross-compile tools
-run-name: ${{ github.event.inputs.run_name || github.actor }}
+run-name: ${{ github.event.inputs.run_name || format('{0}-{1}', github.event.inputs.tool_name, github.event.inputs.tool_version) }}
 on:
   workflow_dispatch:
     inputs:
