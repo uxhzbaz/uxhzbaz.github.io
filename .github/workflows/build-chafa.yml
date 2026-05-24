@@ -178,6 +178,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release
+          pattern: chafa-*
           merge-multiple: true
 
       - name: 生成 RELEASE.md
