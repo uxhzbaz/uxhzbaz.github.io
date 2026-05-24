@@ -101,13 +101,15 @@ jobs:
         run: |
           curl -fsSL https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.0/libjpeg-turbo-3.1.0.tar.gz | tar xz
           cd libjpeg-turbo-3.1.0
-          cmake -B build \
-            -DCMAKE_TOOLCHAIN_FILE=$TC/../../../../../../build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-$API \
+          NDK=$(ls /usr/local/lib/android/sdk/ndk/ | sort -V | tail -1)
+          cmake -B build -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=/usr/local/lib/android/sdk/ndk/$NDK/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-$API \
             -DCMAKE_INSTALL_PREFIX=$P \
-            -DENABLE_SHARED=OFF -DENABLE_STATIC=ON \
-            -DCMAKE_C_COMPILER=$CC
-          cmake --build build -j$(nproc) && cmake --install build
+            -DENABLE_SHARED=OFF \
+            -DENABLE_STATIC=ON
+          ninja -C build && ninja -C build install
 
       - name: Build libwebp
         run: |
