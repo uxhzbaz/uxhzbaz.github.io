@@ -20,10 +20,46 @@ jobs:
           curl -L "https://github.com/mustafa1dev/TeleVip-LSPosed/archive/refs/tags/3.5.tar.gz" -o televip.tar.gz
           tar -xzf televip.tar.gz
 
-      - name: Patch Build Script
+      - name: Patch Build Script (Fix Output Path)
         run: |
           sed -i 's|build/intermediates/apk/debug|build/outputs/apk/debug|g' TeleVip-LSPosed-3.5/app/build.gradle
           sed -i 's|//.*||g' TeleVip-LSPosed-3.5/app/build.gradle
+
+      - name: Patch SettingsHook (Move Ghost Mode to Bottom)
+        shell: python
+        run: |
+          import re
+          import os
+
+          file_path = 'TeleVip-LSPosed-3.5/app/src/main/java/com/my/televip/settings/hook/SettingsHook.java'
+
+          if not os.path.exists(file_path):
+              raise FileNotFoundError(f"Target file not found: {file_path}")
+
+          with open(file_path, 'r', encoding='utf-8') as f:
+              content = f.read()
+
+          # 使用模糊匹配的结构化正则表达式，自动兼容任意缩进和空格变化
+          pattern = r"if\s*\(\s*id_item_add\s*==\s*-1\s*\)\s*\{\s*for\s*\(.*?\)\s*\{\s*UItem\s+item\s*=.*?break;\s*\}\s*\}\s*\}\s*else\s*\{\s*arrayList\.add\s*\(.*?\);\s*\}"
+
+          replacement = """if (id_item_add == -1) {
+                                    int targetIndex = arrayList.size() > 0 ? arrayList.size() - 1 : 0;
+                                    arrayList.add(targetIndex, uItem);
+                                    id_item_add = targetIndex;
+                                } else {
+                                    int insertIndex = Math.min(id_item_add, arrayList.size());
+                                    arrayList.add(insertIndex, uItem);
+                                }"""
+
+          modified_content, count = re.subn(pattern, replacement, content, flags=re.DOTALL)
+
+          if count == 0:
+              raise Exception("Error: 无法在 SettingsHook.java 中找到匹配的目标代码块！请检查源码结构。")
+          
+          print(f"成功修改开关排序逻辑，共替换 {count} 处代码。")
+
+          with open(file_path, 'w', encoding='utf-8') as f:
+              f.write(modified_content)
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -48,7 +84,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: TeleVip-Builds
+          name: TeleVip-Patched-Builds
           path: |
             TeleVip-LSPosed-3.5/app/build/outputs/apk/debug/*.apk
             TeleVip-LSPosed-3.5/app/build/outputs/apk/release/*.apk
