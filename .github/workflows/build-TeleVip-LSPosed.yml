@@ -44,7 +44,8 @@ jobs:
     - name: Build with Gradle
       run: |
         cd TeleVip-LSPosed-3.5
-        ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
+        ./gradlew assembleDebug --no-daemon --stacktrace
+        ./gradlew assembleRelease --no-daemon --stacktrace
 
     - name: Upload Built APKs
       uses: actions/upload-artifact@v4
