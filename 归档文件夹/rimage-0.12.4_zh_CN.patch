@@ -1,0 +1,2590 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index be3ed68..9c94717 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -2,7 +2,7 @@
+ name          = "rimage"
+ version       = "0.12.4"
+ edition       = "2024"
+-description   = "Optimize images natively with best-in-class codecs"
++description   = "使用一流的编解码器原生优化图像"
+ license       = "MIT OR Apache-2.0"
+ readme        = "README.md"
+ authors       = ["Vladyslav Vladinov <vladinov.dev@gmail.com>"]
+diff --git a/build.rs b/build.rs
+index 58a67ad..687258a 100644
+--- a/build.rs
++++ b/build.rs
+@@ -7,7 +7,7 @@ fn main() {
+     if env::var("CARGO_CFG_TARGET_OS").unwrap() != "windows" {
+         println!(
+             "cargo:warning={:#?}",
+-            "This build script is only for windows target, skipping..."
++            "此构建脚本仅适用于 windows 目标, 正在跳过..."
+         );
+         return;
+     }
+diff --git a/src/cli.rs b/src/cli.rs
+index 97762bb..21f05be 100644
+--- a/src/cli.rs
++++ b/src/cli.rs
+@@ -1,4 +1,4 @@
+-use clap::{Command, command};
++use clap::{arg, Arg, ArgAction, Command, command};
+ use indoc::indoc;
+ 
+ use self::codecs::Codecs;
+@@ -10,35 +10,57 @@ pub mod preprocessors;
+ pub mod utils;
+ 
+ pub fn cli() -> Command {
+-    command!()
+-        .arg_required_else_help(true)
+-        .after_help(indoc! {r#"
+-List of supported codecs
+-| Image Format  | Input | Output | Note            |
+-| ------------- | ----- | ------ | --------------- |
+-| avif          | O     | O      | Static only     |
+-| bmp           | O     | X      |                 |
+-| farbfeld      | O     | O      |                 |
+-| hdr           | O     | O      |                 |
+-| jpeg          | O     | O      |                 |
+-| jpeg_xl(jxl)  | O     | O      |                 |
+-| mozjpeg(moz)  | O     | O      |                 |
+-| oxipng(oxi)   | O     | O      | Static only     |
+-| png           | O     | O      | Static only     |
+-| ppm           | O     | O      |                 |
+-| psd           | O     | X      |                 |
+-| qoi           | O     | O      |                 |
+-| tiff          | O     | X      |                 |
+-| webp          | O     | O      | Static only     |
++command!()
++.arg_required_else_help(true)
++.disable_help_flag(true)
++.disable_version_flag(true)
++.disable_help_subcommand(true)
++.arg(
++Arg::new("help")
++.long("help")
++.short('h')
++.action(ArgAction::Help)
++.help("打印帮助")
++)
++.arg(
++Arg::new("version")
++.long("version")
++.short('V')
++.action(ArgAction::Version)
++.help("打印版本")
++)
++.subcommand(
++Command::new("help")
++.about("打印此消息或给定子命令的帮助信息")
++.arg(arg!([COMMAND]... "要查看帮助的子命令"))
++)
++.after_help(indoc! {r#"
++支持的编解码列表
++|   图像格式    | 输入 | 输出 |       注意      |
++| ------------- | ---- | ---- | --------------- |
++| avif          | O    | O    | 仅限静态图像    |
++| bmp           | O    | X    |                 |
++| farbfeld      | O    | O    |                 |
++| hdr           | O    | O    |                 |
++| jpeg          | O    | O    |                 |
++| jpeg_xl(jxl)  | O    | O    |                 |
++| mozjpeg(moz)  | O    | O    |                 |
++| oxipng(oxi)   | O    | O    | 仅限静态图像    |
++| png           | O    | O    | 仅限静态图像    |
++| ppm           | O    | O    |                 |
++| psd           | O    | X    |                 |
++| qoi           | O    | O    |                 |
++| tiff          | O    | X    |                 |
++| webp          | O    | O    | 仅限静态图像    |
+ 
+-List of supported preprocessing options
+-- Resize
+-- Quantization
+-- Alpha premultiply
++支持的预处理选项列表
++- 调整大小
++- 量化
++- Alpha 预乘
+ 
+-List of supported mode for output info presenting
+-- No-progress (Shown on Default)
+-- Quiet (Show all msgs on Default)
++支持的输出信息显示模式列表
++- 无进度条 (默认不显示)
++- 静默 (默认显示所有消息)
+ "#})
+         .codecs()
+ }
+diff --git a/src/cli/codecs/avif.rs b/src/cli/codecs/avif.rs
+index cf6c0ed..c8ff720 100644
+--- a/src/cli/codecs/avif.rs
++++ b/src/cli/codecs/avif.rs
+@@ -5,24 +5,24 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn avif() -> Command {
+     Command::new("avif")
+-        .about("Encode images into AVIF format. (Small and Efficient)")
++        .about("将图像编码为 AVIF 格式. (体积小且高效)")
+         .args([
+-            arg!(-q --quality <NUM> "Quality which the image will be encoded with.")
++            arg!(-q --quality <NUM> "图像编码时的质量.")
+                 .value_parser(value_parser!(u8).range(1..=100))
+                 .default_value("50"),
+-            arg!(--alpha_quality <NUM> "Separate alpha quality which the image will be encoded with.")
++            arg!(--alpha_quality <NUM> "图像编码时单独的 alpha 质量.")
+                 .value_parser(value_parser!(u8).range(1..=100)),
+-            arg!(--speed <NUM> "Compression speed (effort).")
+-                .long_help(indoc! {r#"Compression speed (effort).
++            arg!(--speed <NUM> "压缩速度 (性能消耗).")
++                .long_help(indoc! {r#"压缩速度 (性能消耗).
+ 
+-                1 = very very slow, but max compression (smallest)
+-                10 = quick, but larger file sizes and lower quality."#})
++                1 = 非常非常慢, 压缩率最高 (体积最小)
++                10 = 很快, 但文件体积较大且质量较低."#})
+                 .value_parser(value_parser!(u8).range(1..=10))
+                 .default_value("6"),
+-            arg!(--colorspace <COLOR> "Set color space of AVIF being written.")
++            arg!(--colorspace <COLOR> "设置写入的 AVIF 色彩空间.")
+                 .value_parser(["ycbcr", "rgb"])
+                 .default_value("ycbcr"),
+-            arg!(--alpha_mode <MODE> "Configure handling of color channels in transparent images.")
++            arg!(--alpha_mode <MODE> "配置透明图像中颜色通道的处理方式.")
+                 .value_parser(["UnassociatedDirty", "UnassociatedClean", "Premultiplied"])
+                 .default_value("UnassociatedClean")
+         ]).common_args()
+diff --git a/src/cli/codecs/farbfeld.rs b/src/cli/codecs/farbfeld.rs
+index f3c0dcd..b75d96e 100644
+--- a/src/cli/codecs/farbfeld.rs
++++ b/src/cli/codecs/farbfeld.rs
+@@ -4,6 +4,6 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn farbfeld() -> Command {
+     Command::new("farbfeld")
+-        .about("Encode images into Farbfeld format. (Bitmapped)")
++        .about("将图像编码为 Farbfeld 格式. (位图)")
+         .common_args()
+ }
+diff --git a/src/cli/codecs/jpeg.rs b/src/cli/codecs/jpeg.rs
+index ac45daa..d1d20d9 100644
+--- a/src/cli/codecs/jpeg.rs
++++ b/src/cli/codecs/jpeg.rs
+@@ -5,11 +5,11 @@ use crate::cli::common::CommonArgs;
+ pub fn jpeg() -> Command {
+     Command::new("jpeg")
+         .alias("jpg")
+-        .about("Encode images into JPEG format. (Progressive-able)")
++        .about("将图像编码为 JPEG 格式. (支持渐进式)")
+         .args([
+-            arg!(-q --quality <NUM> "Quality which the image will be encoded with.")
++            arg!(-q --quality <NUM> "图像编码时的质量.")
+                 .value_parser(value_parser!(u8).range(1..=100)),
+-            arg!(--progressive "Set to use progressive encoding."),
++            arg!(--progressive "设置为使用渐进式编码."),
+         ])
+         .common_args()
+ }
+diff --git a/src/cli/codecs/jpeg_xl.rs b/src/cli/codecs/jpeg_xl.rs
+index b2875c5..b1b3bea 100644
+--- a/src/cli/codecs/jpeg_xl.rs
++++ b/src/cli/codecs/jpeg_xl.rs
+@@ -6,9 +6,9 @@ use crate::cli::common::CommonArgs;
+ pub fn jpeg_xl() -> Command {
+     Command::new("jpeg_xl")
+         .alias("jxl")
+-        .about("Encode images into JpegXL format. (Big but Lossless)")
+-        .long_about(indoc! {r#"Encode images into jpeg xl format.
++        .about("将图像编码为 JpegXL 格式. (体积大但无损)")
++        .long_about(indoc! {r#"图像编码为 jpeg xl 格式.
+ 
+-        Only supports lossless encoding"#})
++        仅支持无损编码"#})
+         .common_args()
+ }
+diff --git a/src/cli/codecs/mozjpeg.rs b/src/cli/codecs/mozjpeg.rs
+index 7920e68..a5816ff 100644
+--- a/src/cli/codecs/mozjpeg.rs
++++ b/src/cli/codecs/mozjpeg.rs
+@@ -5,24 +5,24 @@ use crate::cli::common::CommonArgs;
+ pub fn mozjpeg() -> Command {
+     Command::new("mozjpeg")
+         .alias("moz")
+-        .about("Encode images into JPEG format using MozJpeg codec. (RECOMMENDED and Small)")
++        .about("使用 MozJpeg 编解码器将图像编码为 JPEG 格式. (推荐且体积小)")
+         .args([
+-            arg!(-q --quality <NUM> "Quality, values 60-80 are recommended.")
++            arg!(-q --quality <NUM> "质量, 推荐值为 60-80.")
+                 .value_parser(value_parser!(u8).range(1..=100))
+                 .default_value("75"),
+-            arg!(--chroma_quality <NUM> "Separate chroma quality.")
++            arg!(--chroma_quality <NUM> "单独的色度质量.")
+                 .value_parser(value_parser!(u8).range(1..=100)),
+-            arg!(--baseline "Set to use baseline encoding (by default is progressive)."),
+-            arg!(--no_optimize_coding "Set to make files larger for no reason."),
+-            arg!(--smoothing <NUM> "Use MozJPEG's smoothing.")
++            arg!(--baseline "设置为使用基线编码 (默认为渐进式)."),
++            arg!(--no_optimize_coding "设置此项以无故增大文件体积."),
++            arg!(--smoothing <NUM> "使用 MozJPEG 的平滑处理.")
+                 .value_parser(value_parser!(u8).range(1..=100)),
+-            arg!(--colorspace <COLOR> "Set color space of JPEG being written.")
++            arg!(--colorspace <COLOR> "设置写入的 JPEG 色彩空间.")
+                 .value_parser(["ycbcr", "grayscale", "rgb"])
+                 .default_value("ycbcr"),
+-            arg!(--multipass "Specifies whether multiple scans should be considered during trellis quantization."),
+-            arg!(--subsample <PIX> "Sets chroma subsampling.")
++            arg!(--multipass "指定在网格量化期间是否应考虑多次扫描."),
++            arg!(--subsample <PIX> "设置色度子采样.")
+                 .value_parser(value_parser!(u8).range(1..=4)),
+-            arg!(--qtable <TABLE> "Use a specific quantization table.")
++            arg!(--qtable <TABLE> "使用特定的量化表.")
+                 .value_parser([
+                     "AhumadaWatsonPeterson",
+                     "AnnexK",
+diff --git a/src/cli/codecs/oxipng.rs b/src/cli/codecs/oxipng.rs
+index 2bc24c3..c56ffe6 100644
+--- a/src/cli/codecs/oxipng.rs
++++ b/src/cli/codecs/oxipng.rs
+@@ -6,21 +6,20 @@ use crate::cli::common::CommonArgs;
+ pub fn oxipng() -> Command {
+     Command::new("oxipng")
+         .alias("oxi")
+-        .about("Encode images into PNG format using OxiPNG codec. (Progressive-able)")
++        .about("使用 OxiPNG 编解码器将图像编码为 PNG 格式. (支持渐进式)")
+         .args([
+-            arg!(--interlace "Set interlace mode (progressive)."),
+-            arg!(--effort <NUM> "Optimization level (0-6)").long_help(indoc! {r#"Set the optimization level preset.
+-            The default level 2 is quite fast and provides good compression.
+-            
+-            Lower levels are faster, higher levels provide better compression, though with increasingly diminishing returns.
++            arg!(--interlace "设置交错模式 (渐进式)."),
++            arg!(--effort <NUM> "优化级别 (0-6)").long_help(indoc! {r#"设置优化级别预设.
++默认级别 2 相当快并且提供良好的压缩.
++            较低的级别更快, 较高的级别提供更好的压缩, 但收益递减.
+ 
+-            0   => (1 trial, determined heuristically)
+-            1   => (1 trial, determined heuristically)
+-            2   => (4 fast trials, 1 main trial)
+-            3   => (4 trials)
+-            4   => (4 trials)
+-            5   => (8 trials)
+-            6   => (10 trials)"#})
++            0   => (1 次尝试, 启发式确定)
++            1   => (1 次尝试, 启发式确定)
++            2   => (4 次快速尝试, 1 次主要尝试)
++            3   => (4 次尝试)
++            4   => (4 次尝试)
++            5   => (8 次尝试)
++            6   => (10 次尝试)"#})
+             .value_parser(value_parser!(u8).range(0..=6))
+             .default_value("2"),
+         ]).common_args()
+diff --git a/src/cli/codecs/png.rs b/src/cli/codecs/png.rs
+index ee04849..6d2fcd4 100644
+--- a/src/cli/codecs/png.rs
++++ b/src/cli/codecs/png.rs
+@@ -4,6 +4,6 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn png() -> Command {
+     Command::new("png")
+-        .about("Encode images into PNG format.")
++        .about("将图像编码为 PNG 格式.")
+         .common_args()
+ }
+diff --git a/src/cli/codecs/ppm.rs b/src/cli/codecs/ppm.rs
+index 71f3dfe..77d04cd 100644
+--- a/src/cli/codecs/ppm.rs
++++ b/src/cli/codecs/ppm.rs
+@@ -4,6 +4,6 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn ppm() -> Command {
+     Command::new("ppm")
+-        .about("Encode images into PPM format. (Bitmapped)")
++        .about("将图像编码为 PPM 格式. (位图)")
+         .common_args()
+ }
+diff --git a/src/cli/codecs/qoi.rs b/src/cli/codecs/qoi.rs
+index 8b054e6..d6bd730 100644
+--- a/src/cli/codecs/qoi.rs
++++ b/src/cli/codecs/qoi.rs
+@@ -4,6 +4,6 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn qoi() -> Command {
+     Command::new("qoi")
+-        .about("Encode images into QOI format. (Trendy and Small)")
++        .about("将图像编码为 QOI 格式. (新潮且体积小)")
+         .common_args()
+ }
+diff --git a/src/cli/codecs/webp.rs b/src/cli/codecs/webp.rs
+index 8794069..150b5fa 100644
+--- a/src/cli/codecs/webp.rs
++++ b/src/cli/codecs/webp.rs
+@@ -4,18 +4,18 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn webp() -> Command {
+     Command::new("webp")
+-        .about("Encode images into WebP format. (Lossless-able)")
++        .about("将图像编码为 WebP 格式. (支持无损)")
+         .args([
+-            arg!(--lossless "Encode image without quality loss.").conflicts_with_all(["quality"]),
+-            arg!(-q --quality <NUM> "Quality, values 60-80 are recommended.")
++            arg!(--lossless "对图像进行无损编码.").conflicts_with_all(["quality"]),
++            arg!(-q --quality <NUM> "质量, 推荐值为 60-80")
+                 .value_parser(value_parser!(u8).range(1..=100))
+                 .default_value("75"),
+-            arg!(--slight_loss <NUM> "Slight loss in quality for lossless encoding.")
++            arg!(--slight_loss <NUM> "无损编码时允许轻微质量损失.")
+                 .value_parser(value_parser!(u8).range(0..=100))
+                 .default_value("0")
+                 .requires("lossless"),
+-            arg!(--discrete "Discrete tone image.").requires("lossless"),
+-            arg!(--exact "Preserve transparent data."),
++            arg!(--discrete "离散色调图像.").requires("lossless"),
++            arg!(--exact "保留透明数据."),
+         ])
+         .common_args()
+ }
+diff --git a/src/cli/common.rs b/src/cli/common.rs
+index 829717b..c55d107 100644
+--- a/src/cli/common.rs
++++ b/src/cli/common.rs
+@@ -1,66 +1,73 @@
+-use std::path::PathBuf;
+-
+-use clap::{ArgAction, Command, arg, value_parser};
+-use indoc::indoc;
+-
+-use super::{preprocessors::Preprocessors, utils::threads};
+-
+-impl CommonArgs for Command {
+-    fn common_args(self) -> Self {
+-        self
+-        .next_help_heading("General").args([
+-            arg!(files: <FILES> ... "Input file(s) to process.")
+-                .long_help(indoc! {r#"Input file(s) to process.
+-
+-                If the file path contains spaces, enclose the path with double quotation marks on both sides."#})
+-                .value_parser(value_parser!(PathBuf)),
+-            arg!(-d --directory <DIR> "The directory to write output file(s) to.")
+-                .long_help(indoc! {r#"The directory to write output file(s) to.
+-
+-                Output files will be written without preserving the folder structure unless the --recursive flag is used."#})
+-                .value_parser(value_parser!(PathBuf)),
+-            arg!(-r --recursive "Preserves the folder structure when writing output file(s).")
+-                .long_help(indoc! {r#"Preserves the folder structure when writing output file(s).
+-
+-                This option should be used in conjunction with the --directory option."#})
+-                .requires("directory"),
+-            arg!(-s --suffix [SUFFIX] "Adds the '@suffix' to the names of output file(s).")
+-                .long_help(indoc! {r#"Adds the '@suffix' to the names of output file(s).
+-
+-                When '2x' is provided as the value, the resulting files will be renamed with the '@2x' suffix.
+-                For example, a file named 'file.jpeg' will become 'file@2x.jpeg'.
+-
+-                If no suffix is provided, the default updated suffix '@updated' will be added to the resulting files."#})
+-                .default_missing_value("updated"),
+-            arg!(-b --backup "Adds the '@backup' to the names of input file(s)."),
+-            arg!(-t --threads <NUM> "The maximum number of images to process concurrently.")
+-                .long_help(indoc! {r#"The maximum number of images to process concurrently.
+-
+-                Limits how many images are decoded and held in memory at once.
+-                Higher values increase speed but use more RAM, which may cause out-of-memory errors with large images.
+-                By default, processes one image at a time (--threads 1)."#})
+-                .value_parser(value_parser!(u8).range(1i64..=threads::num_threads() as i64)),
+-            arg!(-x --strip "Strip metadata when encoding images (where supported)")
+-                .action(ArgAction::SetTrue),
+-            arg!(--"no-progress" "Disables progress bar.")
+-                .long_help(indoc! {r#"Disables progress bar.
+-
+-                By default, progress bar is enabled."#}),
+-            arg!(--quiet "Disables all output.")
+-                .long_help(indoc! {r#"Disables all output.
+-
+-                By default, all output is enabled."#}),
+-            #[cfg(feature = "metadata")]
+-            arg!(--metadata [FILE] "Outputs metadata of the processed image(s).")
+-                .long_help(indoc! {r#"Outputs metadata of the processed image(s).
+-
+-                This will output the metadata of the processed image(s) in JSON format."#})
+-                .value_parser(value_parser!(PathBuf)),
+-        ])
+-        .preprocessors()
+-    }
+-}
+-
+-pub trait CommonArgs {
+-    fn common_args(self) -> Self;
+-}
++use std::path::PathBuf;
++
++use clap::{Arg, ArgAction, Command, arg, value_parser};
++use indoc::indoc;
++
++use super::{preprocessors::Preprocessors, utils::threads};
++
++impl CommonArgs for Command {
++    fn common_args(self) -> Self {
++self
++.disable_help_flag(true)
++.arg(
++Arg::new("help")
++.long("help")
++.short('h')
++.action(ArgAction::Help)
++.help("打印帮助")
++)
++.next_help_heading("General").args([
++            arg!(files: <FILES> ... "输入文件.")
++                .long_help(indoc! {r#"要处理的输入文件.
++
++                如果文件路径包含空格, 请在路径两侧使用双引号."#})
++                .value_parser(value_parser!(PathBuf)),
++            arg!(-d --directory <DIR> "写入输出文件的目录.")
++                .long_help(indoc! {r#"写入输出文件的目录.
++
++                除非使用 --recursive 标志, 否则将不保留文件夹结构写入输出文件."#})
++                .value_parser(value_parser!(PathBuf)),
++            arg!(-r --recursive "在写入输出文件时保留文件夹结构.")
++                .long_help(indoc! {r#"在写入输出文件时保留文件夹结构
++
++                此选项应与 --directory 选项结合使用."#})
++                .requires("directory"),
++            arg!(-s --suffix [SUFFIX] "在输出文件名称后添加 '@suffix'.")
++                .long_help(indoc! {r#"在输出文件名称后添加 '@suffix'.
++
++                当提供 '2x' 作为值时, 生成的文件将被重命名为带有 '@2x' 后缀.
++            例如, 名为 'file.jpeg' 的文件将变为 'file@2x.jpeg'.
++
++                如果未提供后缀, 则默认将更新后的后缀 '@updated' 添加到生成的文件中."#})
++                .default_missing_value("updated"),
++            arg!(-b --backup "在输入文件名称后添加 '@backup'."),
++            arg!(-t --threads <NUM> "并发处理的最大图像数.")
++                .long_help(indoc! {r#"并发处理的最大图像数.
++
++                限制同时解码并保存在内存中的图像数量.
++            较高的值会提高速度, 但会使用更多 RAM, 这可能会在处理大型图像时导致内存不足错误.
++                默认情况下, 一次处理一张图像 (--threads 1)."#})
++                .value_parser(value_parser!(u8).range(1i64..=threads::num_threads() as i64)),
++            arg!(-x --strip "在编码图像时剥离元数据 (如果支持)")
++                .action(ArgAction::SetTrue),
++            arg!(--"no-progress" "禁用进度条.")
++                .long_help(indoc! {r#"禁用进度条.
++
++                默认情况下, 进度条处于启用状态."#}),
++            arg!(--quiet "禁用所有输出.")
++                .long_help(indoc! {r#"禁用所有输出.
++
++                默认情况下, 所有输出处于启用状态."#}),
++            #[cfg(feature = "metadata")]
++            arg!(--metadata [FILE] "输出已处理图像的元数据.")
++                .long_help(indoc! {r#"输出已处理图像的元数据.
++                这会将已处理图像的元数据以 JSON 格式输出."#})
++                .value_parser(value_parser!(PathBuf)),
++        ])
++        .preprocessors()
++    }
++}
++
++pub trait CommonArgs {
++    fn common_args(self) -> Self;
++}
+diff --git a/src/cli/pipeline.rs b/src/cli/pipeline.rs
+index 6dc60f1..71dd913 100644
+--- a/src/cli/pipeline.rs
++++ b/src/cli/pipeline.rs
+@@ -104,7 +104,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+             let downscale = matches.get_flag("downscale") && !matches.get_flag("no-downscale");
+             let upscale = matches.get_flag("upscale") && !matches.get_flag("no-upscale");
+ 
+-            log::debug!("downscale: {downscale}, upscale: {upscale}");
++            log::debug!("缩小: {downscale}, 放大: {upscale}");
+ 
+             let size = img.dimensions();
+ 
+@@ -113,22 +113,22 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                 .zip(matches.indices_of("resize").unwrap())
+                 .for_each(|(value, idx)| {
+                     let (w, h) = value.map_dimensions(size.0, size.1);
+-                    log::trace!("setup resize {value} on index {idx}");
++                    log::trace!("在索引 {idx} 处设置调整大小 {value}");
+ 
+                     // Skip if the image is already the desired size
+                     // or if both downscale and upscale are disabled
+                     if (!downscale && !upscale) || (w == size.0 && h == size.1) {
+-                        log::trace!("skip resize to {w}x{h} on index {idx}");
++                        log::trace!("跳过在索引 {idx} 处调整大小为 {w}x{h}");
+                         return;
+                     }
+ 
+                     if !downscale && (w <= size.0 || h <= size.1) {
+-                        log::trace!("downscaling disabled, skip resize to {w}x{h} on index {idx}");
++                        log::trace!("禁用缩小, 跳过在索引 {idx} 处调整大小为 {w}x{h}");
+                         return;
+                     }
+ 
+                     if !upscale && (w >= size.0 || h >= size.1) {
+-                        log::trace!("upscaling disabled, skip resize to {w}x{h} on index {idx}");
++                        log::trace!("禁用放大, 跳过在索引 {idx} 处调整大小为 {w}x{h}");
+                         return;
+                     }
+ 
+@@ -158,7 +158,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                 .into_iter()
+                 .zip(matches.indices_of("quantization").unwrap())
+                 .for_each(|(value, idx)| {
+-                    log::trace!("setup quantization {value} on index {idx}");
++                    log::trace!("在索引 {idx} 处设置量化 {value}");
+ 
+                     map.insert(
+                         idx,
+@@ -174,7 +174,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+             .zip(matches.indices_of("premultiply").unwrap())
+             .for_each(|(value, idx)| {
+                 if let Some(op) = map.get(&(idx + 2)) {
+-                    log::trace!("setup alpha premultiply for {}", op.name());
++                    log::trace!("为 {} 设置 alpha 预乘", op.name());
+ 
+                     map.insert(
+                         idx,
+@@ -183,7 +183,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+ 
+                     assert!(
+                         !map.contains_key(&(idx + 3)),
+-                        "There is a operation at {} aborting",
++                        "在 {} 处存在操作, 正在中止",
+                         idx + 3
+                     );
+ 
+@@ -192,7 +192,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                         Box::new(PremultiplyAlpha::new(AlphaState::NonPreMultiplied)),
+                     );
+                 } else {
+-                    log::warn!("No operation found for premultiply at index {idx}")
++                    log::warn!("在索引 {idx} 处未找到用于预乘的操作")
+                 }
+             })
+     }
+@@ -305,7 +305,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                     "grayscale" => mozjpeg::ColorSpace::JCS_GRAYSCALE,
+                     cs => {
+                         return Err(ImageErrors::GenericString(format!(
+-                            "Unsupported mozjpeg colorspace: {cs}",
++                            "不支持 mozjpeg 色彩空间: {cs}",
+                         )));
+                     }
+                 },
+@@ -333,7 +333,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                         }
+                         q => {
+                             return Err(ImageErrors::GenericString(
+-                                format!("Unknown qtable: {q}",),
++                                format!("未知的 qtable: {q}",),
+                             ));
+                         }
+                     }),
+@@ -407,7 +407,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                     "rgb" => ravif::ColorModel::RGB,
+                     cs => {
+                         return Err(ImageErrors::GenericString(format!(
+-                            "Unsupported avif colorspace: {cs}",
++                            "不支持 avif 色彩空间: {cs}",
+                         )));
+                     }
+                 },
+@@ -421,7 +421,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                     "Premultiplied" => ravif::AlphaColorMode::Premultiplied,
+                     mode => {
+                         return Err(ImageErrors::GenericString(format!(
+-                            "Unsupported avif alpha mode: {mode}",
++                            "不支持 avif alpha 模式: {mode}",
+                         )));
+                     }
+                 },
+@@ -452,7 +452,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+         "qoi" => Ok(AvailableEncoders::Qoi(Box::new(QoiEncoder::new()))),
+ 
+         name => Err(ImageErrors::GenericString(format!(
+-            "Encoder \"{name}\" not found",
++            "编码器 \"{name}\" 未找到",
+         ))),
+     }
+ }
+diff --git a/src/cli/preprocessors/mod.rs b/src/cli/preprocessors/mod.rs
+index fdb891b..5128cff 100644
+--- a/src/cli/preprocessors/mod.rs
++++ b/src/cli/preprocessors/mod.rs
+@@ -25,94 +25,88 @@ impl Preprocessors for Command {
+             .next_help_heading("Preprocessors")
+             .args([
+                 #[cfg(feature = "resize")]
+-                arg!(--resize <RESIZE> "Resize the image(s) according to the specified criteria.")
+-                    .long_help(indoc! {r#"Resize the image(s) according to the specified criteria.
+-
+-                    Possible values:
+-                    - @1.5:    Enlarge image size by this multiplier
+-                    - 150%:    Adjust image size by this percentage
+-                    - 100x100: Resize image to Width×Height
+-                    - 100w:    Adjust image dimensions while maintaining the aspect ratio based on the width
+-                    - 100h:    Adjust image dimensions while maintaining the aspect ratio based on the height"#})
++                arg!(--resize <RESIZE> "根据指定的标准调整图像大小.")
++                    .long_help(indoc! {r#"根据指定的标准调整图像大小.
++
++                    可能的值:
++                    - @1.5:    按此倍数放大图像尺寸
++                    - 150%:    按此百分比调整图像尺寸
++                    - 100x100: 将图像尺寸调整为 宽度x高度
++                    - 100w:    基于宽度保持纵横比来调整图像尺寸
++                    - 100h:    基于高度保持纵横比来调整图像尺寸"#})
+                     .value_parser(value_parser!(ResizeValue))
+                     .action(ArgAction::Append),
+ 
+                 #[cfg(feature = "resize")]
+-                arg!(--downscale "Downscale the image(s) when resizing.")
+-                    .long_help(indoc! {r#"Downscale the image(s) when resizing.
++                arg!(--downscale "调整大小时缩小图像.")
++                    .long_help(indoc! {r#"调整大小时缩小图像.
+ 
+-                    This is useful when you want to reduce the size of the image when it is larger than the specified size.
+-                    It is recommended to use this option with --resize"#})
++                    当您想在图像大于指定尺寸时减小其尺寸时, 此选项非常有用.
++                    建议将此选项与 --resize 一起使用"#})
+                     .default_value("true")
+                     .action(ArgAction::SetTrue)
+                     .requires("resize")
+                     .overrides_with("no-downscale"),
+                 #[cfg(feature = "resize")]
+-                arg!(--"no-downscale" "Disable downscaling when resizing.")
+-                    .long_help(indoc! {r#"Disable downscaling when resizing.
++                arg!(--"no-downscale" "在调整大小时禁用缩小.")
++                    .long_help(indoc! {r#"在调整大小时禁用缩小.
+ 
+-                    This is useful when you don't want to reduce the size of the image when it is larger than the specified size.
+-                    It is recommended to use this option with --resize"#})
++                    当您不想在图像大于指定尺寸时减小其尺寸时, 此选项非常有用.
++                    建议将此选项与 --resize 一起使用"#})
+                     .action(ArgAction::SetTrue)
+                     .requires("resize"),
+ 
+                 #[cfg(feature = "resize")]
+-                arg!(--upscale "Upscale the image(s) when resizing.")
+-                    .long_help(indoc! {r#"Upscale the image(s) when resizing.
++                arg!(--upscale "调整大小时放大图像.")
++                    .long_help(indoc! {r#"调整大小时放大图像.
+ 
+-                    This is useful when you want to increase the size of the image when it is smaller than the specified size.
+-                    It is recommended to use this option with --resize"#})
++                    当您想在图像小于指定尺寸时增加其尺寸时, 此选项非常有用.
++                建议将此选项与 --resize 一起使用"#})
+                     .default_value("true")
+                     .action(ArgAction::SetTrue)
+                     .requires("resize")
+                     .overrides_with("no-upscale"),
+                 #[cfg(feature = "resize")]
+-                arg!(--"no-upscale" "Disable upscaling when resizing.")
+-                    .long_help(indoc! {r#"Disable upscaling when resizing.
++                arg!(--"no-upscale" "在调整大小时禁用放大.")
++                    .long_help(indoc! {r#"在调整大小时禁用放大.
+ 
+-                    This is useful when you don't want to increase the size of the image when it is smaller than the specified size.
+-                    It is recommended to use this option with --resize"#})
++                    当您不想在图像小于指定尺寸时增加其尺寸时, 此选项非常有用.
++                建议将此选项与 --resize 一起使用"#})
+                     .action(ArgAction::SetTrue)
+                     .requires("resize"),
+ 
+                 #[cfg(feature = "resize")]
+-                arg!(--filter <FILTER> "Filter that used when resizing an image.")
++                arg!(--filter <FILTER> "调整图像大小时使用的滤镜.")
+                     .value_parser(value_parser!(ResizeFilter))
+                     .default_value("lanczos3")
+                     .requires("resize"),
+ 
+                 #[cfg(feature = "quantization")]
+-                arg!(--quantization [QUALITY] "Reduces the color palette to the given quality percentage.")
+-                    .long_help(indoc! {r#"Reduces the color palette to the given quality percentage.
++                arg!(--quantization [QUALITY] "将调色板减少到给定的质量百分比.")
++                    .long_help(indoc! {r#""将调色板减少到给定的质量百分比.
+ 
+-                    This is a preprocessing step that limits how many distinct
+-                    colors the image can use, not a replacement for -q/--quality
+-                    (which controls encoder compression).
++                    这是一个预处理步骤, 它限制了图像可以使用的不同颜色的数量, 而不是 -q/--quality 的替代品 (后者控制编码器压缩).
+ 
+-                    Lower values produce fewer colors, which can introduce
+-                    banding artifacts. For best file-size reduction, combine
+-                    with a lower -q value, e.g. -q 50 --quantization 80.
++                较低的值会产生较少的颜色, 这可能会引入色带伪影. 为获得最佳的文件大小缩减效果, 请结合较低的 -q 值使用, 例如 -q 50 --quantization 80.
+ 
+-                    If quality is not provided, default 75 is used."#})
++                如果未提供质量, 则使用默认值 75."#})
+                     .value_parser(value_parser!(u8).range(1..=100))
+                     .action(ArgAction::Append)
+                     .default_missing_value("75"),
+ 
+                 #[cfg(feature = "quantization")]
+-                arg!(--dithering [QUALITY] "Smooths banding artifacts introduced by quantization.")
+-                    .long_help(indoc! {r#"Smooths banding artifacts introduced by quantization.
++                arg!(--dithering [QUALITY] "平滑由量化引入的色带伪影.")
++                    .long_help(indoc! {r#"平滑由量化引入的色带伪影.
+ 
+-                    Higher values spread quantization error more evenly,
+-                    reducing visible banding at the cost of slightly
+-                    larger file sizes.
++                    较高的值会更均匀地分布量化误差, 减少可见的色带, 代价是文件大小略有增加.
+ 
+-                    Used with --quantization flag.
+-                    If quality is not provided, default 75 is used."#})
++                与 --quantization 标志一起使用.
++                如果未提供质量, 则使用默认值 75."#})
+                     .value_parser(value_parser!(u8).range(1..=100))
+                     .default_missing_value("75")
+                     .requires("quantization"),
+ 
+-                position_sensitive_flag(arg!(--premultiply "Premultiply alpha before operation"))
++                position_sensitive_flag(arg!(--premultiply "操作前预乘 alpha"))
+                     .action(ArgAction::Append)
+             ])
+     }
+diff --git a/src/cli/preprocessors/resize/filter.rs b/src/cli/preprocessors/resize/filter.rs
+index de62acb..6bb0d9e 100644
+--- a/src/cli/preprocessors/resize/filter.rs
++++ b/src/cli/preprocessors/resize/filter.rs
+@@ -28,13 +28,13 @@ impl ValueEnum for ResizeFilter {
+ 
+     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+         Some(match self {
+-            ResizeFilter::Nearest => PossibleValue::new("nearest").help("Simplest filter, for each destination pixel gets nearest source pixel."),
+-            ResizeFilter::Box => PossibleValue::new("box").help("Each pixel contributes equally to destination. For upscaling, like Nearest."),
+-            ResizeFilter::Bilinear => PossibleValue::new("bilinear").help("Uses linear interpolation among contributing pixels for output."),
+-            ResizeFilter::Hamming => PossibleValue::new("hamming").help("Provides quality akin to bicubic for downscaling, sharper than Bilinear, but not optimal for upscaling."),
+-            ResizeFilter::CatmullRom => PossibleValue::new("catmull-rom").help("Employs cubic interpolation for output pixel calculation."),
+-            ResizeFilter::Mitchell => PossibleValue::new("mitchell").help("Utilizes cubic interpolation for output pixel calculation."),
+-            ResizeFilter::Lanczos3 => PossibleValue::new("lanczos3").help("Applies high-quality Lanczos filter for output pixel calculation."),
++            ResizeFilter::Nearest => PossibleValue::new("nearest").help("最简单的滤镜, 每个目标像素获取最近的源像素."),
++            ResizeFilter::Box => PossibleValue::new("box").help("每个像素对目标的贡献相等. 对于放大, 类似于 Nearest."),
++            ResizeFilter::Bilinear => PossibleValue::new("bilinear").help("在贡献像素之间使用线性插值以进行输出."),
++            ResizeFilter::Hamming => PossibleValue::new("hamming").help("缩小时提供类似于双三次的质量, 比 Bilinear 锐利, 但不适合放大."),
++            ResizeFilter::CatmullRom => PossibleValue::new("catmull-rom").help("使用三次插值进行输出像素计算."),
++            ResizeFilter::Mitchell => PossibleValue::new("mitchell").help("利用三次插值进行输出像素计算."),
++            ResizeFilter::Lanczos3 => PossibleValue::new("lanczos3").help("用高质量 Lanczos 滤镜进行输出像素计算."),
+         })
+     }
+ }
+@@ -42,7 +42,7 @@ impl ValueEnum for ResizeFilter {
+ impl std::fmt::Display for ResizeFilter {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         self.to_possible_value()
+-            .expect("no values are skipped")
++            .expect("不跳过任何值")
+             .get_name()
+             .fmt(f)
+     }
+@@ -57,7 +57,7 @@ impl std::str::FromStr for ResizeFilter {
+                 return Ok(*variant);
+             }
+         }
+-        Err(anyhow!("invalid variant: {s}"))
++        Err(anyhow!("无效变体: {s}"))
+     }
+ }
+ 
+diff --git a/src/cli/preprocessors/resize/value.rs b/src/cli/preprocessors/resize/value.rs
+index 8501fc6..a197333 100644
+--- a/src/cli/preprocessors/resize/value.rs
++++ b/src/cli/preprocessors/resize/value.rs
+@@ -70,17 +70,17 @@ impl std::str::FromStr for ResizeValue {
+         match s {
+             s if s.starts_with('@') => Ok(Self::Multiplier(s[1..].parse()?)),
+             s if s.ends_with('%') => Ok(Self::Percentage(s[..s.len() - 1].parse()?)),
+-            s if s.contains('w') && s.contains('h') => Err(anyhow!("Invalid resize value")),
++            s if s.contains('w') && s.contains('h') => Err(anyhow!("无效的调整大小值")),
+             s if s.contains('w') => {
+                 let Some(cap) = WIDTH_RE.captures(&s) else {
+-                    return Err(anyhow!("Invalid resize value"));
++                    return Err(anyhow!("无效的调整大小值"));
+                 };
+ 
+                 Ok(Self::Dimensions(Some(cap["width"].parse()?), None))
+             }
+             s if s.contains('h') => {
+                 let Some(cap) = HEIGHT_RE.captures(&s) else {
+-                    return Err(anyhow!("Invalid resize value"));
++                    return Err(anyhow!("无效的调整大小值"));
+                 };
+ 
+                 Ok(Self::Dimensions(None, Some(cap["height"].parse()?)))
+@@ -88,7 +88,7 @@ impl std::str::FromStr for ResizeValue {
+             s if s.contains('x') => {
+                 let dimensions: Vec<&str> = s.split('x').collect();
+                 if dimensions.len() > 2 {
+-                    return Err(anyhow!("There is more that 2 dimensions"));
++                    return Err(anyhow!("维度不止两个"));
+                 }
+ 
+                 let width = Some(dimensions[0].parse::<usize>()?);
+@@ -97,7 +97,7 @@ impl std::str::FromStr for ResizeValue {
+ 
+                 Ok(Self::Dimensions(width, height))
+             }
+-            _ => Err(anyhow!("Invalid resize value")),
++            _ => Err(anyhow!("无效的调整大小值")),
+         }
+     }
+ }
+diff --git a/src/cli/utils/paths/mod.rs b/src/cli/utils/paths/mod.rs
+index aeaa04c..c0f098e 100644
+--- a/src/cli/utils/paths/mod.rs
++++ b/src/cli/utils/paths/mod.rs
+@@ -16,14 +16,14 @@ pub fn get_paths(
+         .into_iter()
+         .filter_map(move |path| -> Option<(PathBuf, PathBuf)> {
+             if !path.is_file() {
+-                log::warn!("{path:?} is not a file");
++                log::warn!("{path:?} 不是一个文件");
+                 return None;
+             }
+ 
+             let file_name = path
+                 .file_stem()
+                 .and_then(|f| f.to_str())
+-                .unwrap_or("optimized_image");
++                .unwrap_or("已优化图像");
+ 
+             let mut out_path = match &out_dir {
+                 Some(dir) => {
+diff --git a/src/codecs/avif/encoder/mod.rs b/src/codecs/avif/encoder/mod.rs
+index d18e373..acd6b51 100644
+--- a/src/codecs/avif/encoder/mod.rs
++++ b/src/codecs/avif/encoder/mod.rs
+@@ -74,7 +74,7 @@ impl EncoderTrait for AvifEncoder {
+         let (width, height) = image.dimensions();
+         if image.is_animated() {
+             log::warn!(
+-                "AVIF encoder does not support animated images, only the first frame will be encoded"
++                "AVIF 编码器不支持动画图像, 仅编码第一帧"
+             );
+         }
+         let data = &image.flatten_to_u8()[0];
+diff --git a/src/codecs/mozjpeg/encoder/mod.rs b/src/codecs/mozjpeg/encoder/mod.rs
+index 290c14c..c8248ce 100644
+--- a/src/codecs/mozjpeg/encoder/mod.rs
++++ b/src/codecs/mozjpeg/encoder/mod.rs
+@@ -104,7 +104,7 @@ impl EncoderTrait for MozJpegEncoder {
+         let (width, height) = image.dimensions();
+         if image.is_animated() {
+             log::warn!(
+-                "MozJpeg does not support animated images, only the first frame will be encoded"
++                "MozJpeg 不支持动画图像, 仅编码第一帧"
+             );
+         }
+         let data = &image.flatten_to_u8()[0];
+@@ -142,7 +142,7 @@ impl EncoderTrait for MozJpegEncoder {
+                 let applied = self.options.smoothing.max(min_smoothing);
+                 if applied != self.options.smoothing {
+                     log::debug!(
+-                        "Smoothing raised from {} to {applied} to prevent DCT overflow at quality {}",
++                        "平滑度已从 {} 提高至 {applied}, 以防止质量为 {} 时发生 DCT 溢出",
+                         self.options.smoothing,
+                         self.options.quality,
+                     );
+@@ -162,17 +162,17 @@ impl EncoderTrait for MozJpegEncoder {
+             comp.set_smoothing_factor(safe_smoothing);
+             comp.set_color_space(match format {
+                 mozjpeg::ColorSpace::JCS_GRAYSCALE => {
+-                    log::warn!("Input colorspace is GRAYSCALE, using GRAYSCALE as output");
++                    log::warn!("输入色彩空间为 GRAYSCALE, 使用 GRAYSCALE 作为输出");
+ 
+                     mozjpeg::ColorSpace::JCS_GRAYSCALE
+                 }
+                 mozjpeg::ColorSpace::JCS_CMYK => {
+-                    log::warn!("Input colorspace is CMYK, using CMYK as output");
++                    log::warn!("输入色彩空间为 CMYK, 使用 CMYK 作为输出");
+ 
+                     mozjpeg::ColorSpace::JCS_CMYK
+                 }
+                 mozjpeg::ColorSpace::JCS_YCCK => {
+-                    log::warn!("Input colorspace is YCCK, using YCCK as output");
++                    log::warn!("输入色彩空间为 YCCK, 使用 YCCK 作为输出");
+ 
+                     mozjpeg::ColorSpace::JCS_YCCK
+                 }
+@@ -220,7 +220,7 @@ impl EncoderTrait for MozJpegEncoder {
+                 )))
+             } else {
+                 ImageErrors::EncodeErrors(zune_image::errors::ImgEncodeErrors::GenericStatic(
+-                    "Unknown error occurred during encoding",
++                    "编码期间发生未知错误",
+                 ))
+             }
+         })?
+diff --git a/src/codecs/oxipng/encoder/mod.rs b/src/codecs/oxipng/encoder/mod.rs
+index 06271f4..4ecacf7 100644
+--- a/src/codecs/oxipng/encoder/mod.rs
++++ b/src/codecs/oxipng/encoder/mod.rs
+@@ -44,7 +44,7 @@ impl EncoderTrait for OxiPngEncoder {
+ 
+         if image.is_animated() {
+             log::warn!(
+-                "OxiPNG does not support animated images, only the first frame will be encoded"
++                "OxiPNG 不支持动画图像, 仅编码第一帧"
+             );
+         }
+ 
+@@ -60,7 +60,7 @@ impl EncoderTrait for OxiPngEncoder {
+                 .collect()
+         } else {
+             return Err(ImageErrors::EncodeErrors(ImgEncodeErrors::Generic(
+-                format!("{:?} is not supported for oxipng encoding", image.depth()),
++                format!("{:?} 不支持 oxipng 编码", image.depth()),
+             )));
+         }
+         .into_iter()
+@@ -93,7 +93,7 @@ impl EncoderTrait for OxiPngEncoder {
+                 BitDepth::Sixteen => oxipng::BitDepth::Sixteen,
+                 d => {
+                     return Err(ImageErrors::EncodeErrors(ImgEncodeErrors::Generic(
+-                        format!("{d:?} is not supported"),
++                        format!("{d:?} 不支持"),
+                     )));
+                 }
+             },
+diff --git a/src/codecs/tiff/decoder/mod.rs b/src/codecs/tiff/decoder/mod.rs
+index 356b1b8..a2f8f4d 100644
+--- a/src/codecs/tiff/decoder/mod.rs
++++ b/src/codecs/tiff/decoder/mod.rs
+@@ -14,7 +14,7 @@ impl<R: Read + Seek> TiffDecoder<R> {
+     /// Create a new tiff decoder that reads data from `source`
+     pub fn try_new(source: R) -> Result<Self, ImageErrors> {
+         let inner = tiff::decoder::Decoder::new(source).map_err(|e| {
+-            ImageErrors::ImageDecodeErrors(format!("Unable to create TIFF decoder: {e}"))
++            ImageErrors::ImageDecodeErrors(format!("无法创建 TIFF 解码器: {e}"))
+         })?;
+ 
+         Ok(Self {
+@@ -31,7 +31,7 @@ where
+ {
+     fn decode(&mut self) -> Result<Image, ImageErrors> {
+         let (width, height) = self.inner.dimensions().map_err(|e| {
+-            ImageErrors::ImageDecodeErrors(format!("Unable to read dimensions - {e}"))
++            ImageErrors::ImageDecodeErrors(format!("无法读取尺寸 - {e}"))
+         })?;
+ 
+         let (width, height) = (width as usize, height as usize);
+@@ -50,13 +50,13 @@ where
+                 _ => ColorSpace::Unknown,
+             })
+             .map_err(|e| {
+-                ImageErrors::ImageDecodeErrors(format!("Unable to read colorspace - {e}"))
++                ImageErrors::ImageDecodeErrors(format!("无法读取色彩空间 - {e}"))
+             })?;
+ 
+         self.colorspace = colorspace;
+ 
+         let result = self.inner.read_image().map_err(|e| {
+-            ImageErrors::ImageDecodeErrors(format!("Unable to decode TIFF file - {e}"))
++            ImageErrors::ImageDecodeErrors(format!("无法解密 TIFF 文件 - {e}"))
+         })?;
+ 
+         match result {
+@@ -70,7 +70,7 @@ where
+                 Ok(Image::from_f32(&data, width, height, colorspace))
+             }
+             _ => Err(ImageErrors::ImageDecodeErrors(
+-                "Tiff Data format not supported".to_string(),
++                "不支持 Tiff 数据格式".to_string(),
+             )),
+         }
+     }
+diff --git a/src/codecs/webp/decoder/mod.rs b/src/codecs/webp/decoder/mod.rs
+index 409add1..aede6d7 100644
+--- a/src/codecs/webp/decoder/mod.rs
++++ b/src/codecs/webp/decoder/mod.rs
+@@ -32,7 +32,7 @@ where
+ {
+     fn decode(&mut self) -> Result<Image, ImageErrors> {
+         let (width, height) = self.dimensions().ok_or_else(|| {
+-            ImageErrors::ImageDecodeErrors("WebP image has no frames".to_string())
++            ImageErrors::ImageDecodeErrors("WebP 图像没有帧".to_string())
+         })?;
+         let color = self.out_colorspace();
+ 
+@@ -47,7 +47,7 @@ where
+ 
+         if frames.is_empty() {
+             return Err(ImageErrors::ImageDecodeErrors(
+-                "WebP image contains no frames".to_string(),
++                "WebP 图像不包含任何帧".to_string(),
+             ));
+         }
+ 
+diff --git a/src/codecs/webp/encoder/mod.rs b/src/codecs/webp/encoder/mod.rs
+index 53aa378..83ead6f 100644
+--- a/src/codecs/webp/encoder/mod.rs
++++ b/src/codecs/webp/encoder/mod.rs
+@@ -104,7 +104,7 @@ impl EncoderTrait for WebPEncoder {
+             };
+ 
+             let res = encoder.encode_advanced(&self.options).map_err(|e| {
+-                ImgEncodeErrors::ImageEncodeErrors(format!("webp encoding failed: {e:?}"))
++                ImgEncodeErrors::ImageEncodeErrors(format!("webp 编码失败: {e:?}"))
+             })?;
+ 
+             writer.write(&res).map_err(|e| {
+diff --git a/src/main.rs b/src/main.rs
+index 55e85af..05f0fef 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,741 +1,741 @@
+-use std::{
+-    fs::{self, File},
+-    path::{Path, PathBuf},
+-    sync::{Arc, Condvar, Mutex},
+-    time::{Duration, SystemTime, UNIX_EPOCH},
+-};
+-
+-use cli::{
+-    cli,
+-    pipeline::{decode, operations},
+-    utils::paths::{collect_files, get_paths},
+-};
+-use console::{Term, style};
+-use indicatif::{DecimalBytes, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+-use indicatif_log_bridge::LogWrapper;
+-use little_exif::metadata::Metadata as ExifMetadata;
+-use rimage::operations::icc::ApplySRGB;
+-use serde::{Deserialize, Serialize};
+-use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace};
+-use zune_image::{
+-    core_filters::{colorspace::ColorspaceConv, depth::Depth},
+-    traits::OperationsTrait,
+-};
+-use zune_imageprocs::auto_orient::AutoOrient;
+-
+-use crate::cli::pipeline::encoder;
+-
+-mod cli;
+-
+-const DEBUG: bool = cfg!(debug_assertions);
+-
+-macro_rules! handle_error {
+-    ( $path:expr, $e:expr ) => {
+-        match $e {
+-            Ok(v) => v,
+-            Err(e) => {
+-                log::error!("{}: {e}", $path.display());
+-                return;
+-            }
+-        }
+-    };
+-}
+-
+-const SUPPORTS_EXIF: &[&str; 7] = &["mozjpeg", "oxipng", "png", "jpeg", "jpegxl", "tiff", "webp"];
+-const SUPPORTS_ICC: &[&str; 2] = &["mozjpeg", "oxipng"];
+-
+-struct Result {
+-    output: PathBuf,
+-    input_size: u64,
+-    output_size: u64,
+-}
+-
+-struct ProcessingState {
+-    results: Vec<Result>,
+-    metadata: Option<Metadata>,
+-}
+-
+-impl ProcessingState {
+-    fn new() -> Self {
+-        Self {
+-            results: vec![],
+-            metadata: None,
+-        }
+-    }
+-}
+-
+-/// Limits concurrent image processing to prevent OOM with large images.
+-///
+-/// A `Mutex<isize>` + `Condvar` permit counter. The main thread calls
+-/// [`acquire`](ConcurrencyLimiter::acquire) before spawning work; if the
+-/// counter is at 0 the call blocks. When the returned [`PermitGuard`] is
+-/// dropped, the permit is returned and a blocked waiter is woken.
+-struct ConcurrencyLimiter {
+-    inner: Arc<(Mutex<isize>, Condvar)>,
+-}
+-
+-impl ConcurrencyLimiter {
+-    fn new(max: usize) -> Self {
+-        Self {
+-            inner: Arc::new((Mutex::new(max as isize), Condvar::new())),
+-        }
+-    }
+-
+-    fn acquire(&self) -> PermitGuard {
+-        let (ref lock, ref cvar) = *self.inner;
+-        let mut count = lock.lock().unwrap();
+-        while *count <= 0 {
+-            count = cvar.wait(count).unwrap();
+-        }
+-        *count -= 1;
+-        PermitGuard {
+-            inner: Arc::clone(&self.inner),
+-        }
+-    }
+-}
+-
+-struct PermitGuard {
+-    inner: Arc<(Mutex<isize>, Condvar)>,
+-}
+-
+-impl Drop for PermitGuard {
+-    fn drop(&mut self) {
+-        let (ref lock, ref cvar) = *self.inner;
+-        let mut count = lock.lock().unwrap();
+-        *count += 1;
+-        cvar.notify_one();
+-    }
+-}
+-
+-/// RAII guard that updates progress bars on drop, ensuring they advance
+-/// even when a worker returns early due to an error.
+-struct FinishGuard {
+-    pb: ProgressBar,
+-    pb_main: ProgressBar,
+-}
+-
+-impl Drop for FinishGuard {
+-    fn drop(&mut self) {
+-        self.pb.finish_and_clear();
+-        self.pb_main.inc(1);
+-    }
+-}
+-
+-#[derive(Debug, Serialize, Deserialize, Clone)]
+-struct Metadata {
+-    #[serde(rename = "inputSize")]
+-    input_size: u64,
+-    #[serde(rename = "outputSize")]
+-    output_size: u64,
+-    #[serde(rename = "totalImages")]
+-    total_images: usize,
+-    #[serde(rename = "compressionRatio")]
+-    compression_ratio: f64,
+-    #[serde(rename = "spaceSaved")]
+-    space_saved: i64,
+-    timestamp: u64,
+-    images: Vec<ImageMetadata>,
+-}
+-
+-#[derive(Debug, Serialize, Deserialize, Clone)]
+-struct ImageMetadata {
+-    // File paths
+-    input: PathBuf,
+-    output: PathBuf,
+-
+-    // File information
+-    #[serde(rename = "inputSize")]
+-    input_size: u64,
+-    #[serde(rename = "outputSize")]
+-    output_size: u64,
+-    #[serde(rename = "compressionRatio")]
+-    compression_ratio: f64,
+-    #[serde(rename = "spaceSaved")]
+-    space_saved: i64,
+-
+-    // Image properties
+-    width: u32,
+-    height: u32,
+-    #[serde(rename = "pixelCount")]
+-    pixel_count: u64,
+-    #[serde(rename = "aspectRatio")]
+-    aspect_ratio: f64,
+-
+-    // zune-image specific properties
+-    #[serde(rename = "bitDepth")]
+-    bit_depth: String,
+-    #[serde(rename = "colorSpace")]
+-    color_space: String,
+-    #[serde(rename = "hasAlpha")]
+-    has_alpha: bool,
+-    #[serde(rename = "isAnimated")]
+-    is_animated: bool,
+-    #[serde(rename = "frameCount")]
+-    frame_count: usize,
+-    channels: usize,
+-
+-    // Format information
+-    #[serde(rename = "inputFormat")]
+-    input_format: Option<String>,
+-    #[serde(rename = "outputFormat")]
+-    output_format: String,
+-
+-    // Processing information
+-    #[serde(rename = "processedAt")]
+-    processed_at: u64,
+-    #[serde(rename = "processingTimeMs")]
+-    processing_time_ms: u128,
+-
+-    // File timestamps
+-    #[serde(rename = "inputModified")]
+-    input_modified: Option<u64>,
+-    #[serde(rename = "outputCreated")]
+-    output_created: u64,
+-}
+-
+-fn get_file_extension(path: &Path) -> Option<String> {
+-    path.extension()
+-        .and_then(|ext| ext.to_str())
+-        .map(|s| s.to_lowercase())
+-}
+-
+-fn get_file_modified_time(path: &Path) -> Option<u64> {
+-    fs::metadata(path)
+-        .ok()
+-        .and_then(|metadata| metadata.modified().ok())
+-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+-        .map(|duration| duration.as_secs())
+-}
+-
+-fn get_current_timestamp() -> u64 {
+-    SystemTime::now()
+-        .duration_since(UNIX_EPOCH)
+-        .unwrap_or_default()
+-        .as_secs()
+-}
+-
+-fn bit_depth_to_string(depth: &BitDepth) -> String {
+-    match depth {
+-        BitDepth::Eight => "8-bit".to_string(),
+-        BitDepth::Sixteen => "16-bit".to_string(),
+-        BitDepth::Float32 => "32-bit float".to_string(),
+-        _ => "Unknown".to_string(),
+-    }
+-}
+-
+-fn colorspace_to_string(colorspace: &ColorSpace) -> String {
+-    match colorspace {
+-        ColorSpace::RGB => "RGB".to_string(),
+-        ColorSpace::RGBA => "RGBA".to_string(),
+-        ColorSpace::Luma => "Grayscale".to_string(),
+-        ColorSpace::LumaA => "Grayscale with Alpha".to_string(),
+-        ColorSpace::YCbCr => "YCbCr".to_string(),
+-        ColorSpace::YCCK => "YCCK".to_string(),
+-        ColorSpace::CMYK => "CMYK".to_string(),
+-        ColorSpace::BGR => "BGR".to_string(),
+-        ColorSpace::BGRA => "BGRA".to_string(),
+-        ColorSpace::HSL => "HSL".to_string(),
+-        ColorSpace::HSV => "HSV".to_string(),
+-        _ => "Unknown".to_string(),
+-    }
+-}
+-
+-/// Normalize a user-provided file path into its canonical absolute form.
+-///
+-/// Handles:
+-/// - Expanding `~` to the home directory
+-/// - Resolving relative paths (`.`, `..`) against the current directory
+-///   using component-level joining — avoids `Path::join` which leaves
+-///   `./` and `../` literals in the joined result
+-/// - Canonicalizing existing paths (resolves symlinks, case, remaining `..`)
+-/// - Preserving UNC/verbatim prefixes on Windows
+-fn normalize_path(path: &Path, current_dir: &Path) -> PathBuf {
+-    if path.as_os_str().is_empty() {
+-        return path.to_path_buf();
+-    }
+-
+-    // Expand ~ in the path string
+-    let path = expand_tilde_in_path(path);
+-
+-    // Detect absolute paths (including Windows UNC/verbatim prefixes)
+-    let is_absolute = path.is_absolute()
+-        || path
+-            .components()
+-            .next()
+-            .is_some_and(|c| matches!(c, std::path::Component::Prefix(_)));
+-
+-    let path = if is_absolute {
+-        path
+-    } else {
+-        join_normalized(current_dir, &path)
+-    };
+-
+-    // Canonicalize if the path exists (resolves symlinks, remaining .., case).
+-    // Non-existent paths (output dirs) keep the component-normalized form.
+-    path.canonicalize().unwrap_or(path)
+-}
+-
+-/// Join a base path with a relative path, normalizing `.` and `..` components.
+-///
+-/// Unlike `Path::join`, this resolves `./foo` to `base/foo` instead of
+-/// `base/./foo`, and correctly handles `../` by popping the parent.
+-fn join_normalized(base: &Path, relative: &Path) -> PathBuf {
+-    let mut result = base.to_path_buf();
+-    for c in relative.components() {
+-        match c {
+-            std::path::Component::CurDir => {}
+-            std::path::Component::ParentDir => {
+-                result.pop();
+-            }
+-            other => result.push(other),
+-        }
+-    }
+-    result
+-}
+-
+-/// Expand a leading `~` in a path to the user's home directory.
+-///
+-/// On Unix: uses `HOME` env var.
+-/// On Windows: uses `USERPROFILE` env var.
+-/// Falls back to the original path if the env var is unset.
+-fn expand_tilde_in_path(path: &Path) -> PathBuf {
+-    let s = match path.to_str() {
+-        Some(s) => s,
+-        None => return path.to_path_buf(),
+-    };
+-
+-    if !s.starts_with('~') {
+-        return path.to_path_buf();
+-    }
+-
+-    #[cfg(windows)]
+-    let home_var = "USERPROFILE";
+-    #[cfg(not(windows))]
+-    let home_var = "HOME";
+-
+-    let home_dir = match std::env::var(home_var) {
+-        Ok(h) => PathBuf::from(h),
+-        Err(_) => return path.to_path_buf(),
+-    };
+-
+-    if s == "~" {
+-        return home_dir;
+-    }
+-
+-    // "~/..." → home_dir/...
+-    let after_tilde = &s[1..]; // skip '~'
+-    let trimmed = after_tilde.trim_start_matches(['/', '\\']);
+-    if trimmed.len() < after_tilde.len() {
+-        join_normalized(&home_dir, Path::new(trimmed))
+-    } else {
+-        // "~something" is not a home directory reference
+-        path.to_path_buf()
+-    }
+-}
+-
+-fn main() {
+-    let logger = pretty_env_logger::formatted_builder()
+-        .parse_default_env()
+-        .filter_module("little_exif", log::LevelFilter::Off)
+-        .build();
+-    let level = logger.filter();
+-
+-    let multi = MultiProgress::new();
+-    let sty_main = ProgressStyle::with_template("{bar:40.green/yellow} {pos:>4}/{len:4}")
+-        .unwrap()
+-        .progress_chars("▬▬▬");
+-    let sty_aux_decode = ProgressStyle::with_template("{spinner:.blue} {msg}").unwrap();
+-    let sty_aux_operations = ProgressStyle::with_template("{spinner:.yellow} {msg}").unwrap();
+-    let sty_aux_encode = ProgressStyle::with_template("{spinner:.green} {msg}").unwrap();
+-
+-    LogWrapper::new(multi.clone(), logger).try_init().unwrap();
+-    log::set_max_level(level);
+-
+-    let current_dir = std::env::current_dir().unwrap_or_default();
+-    let matches = cli().get_matches_from(std::env::args());
+-
+-    let state: Arc<Mutex<ProcessingState>> = Arc::new(Mutex::new(ProcessingState::new()));
+-
+-    match matches.subcommand() {
+-        Some((subcommand, matches)) => {
+-            let threads = matches.get_one::<u8>("threads").copied().unwrap_or(1) as usize;
+-            rayon::ThreadPoolBuilder::new()
+-                .num_threads(threads)
+-                .build_global()
+-                .unwrap();
+-
+-            // Normalize file paths: resolve ~, relative paths, canonicalize
+-            let files: Vec<PathBuf> = matches
+-                .get_many::<PathBuf>("files")
+-                .expect("`files` is required")
+-                .map(|p| normalize_path(p, &current_dir))
+-                .collect();
+-            let files = collect_files(&files);
+-            if DEBUG {
+-                dbg!(&files);
+-            }
+-
+-            let file_count = files.iter().filter(|f| f.is_file()).count() as u64;
+-
+-            if file_count == 0 {
+-                log::error!("No input files found. Check the file paths.");
+-                if log::log_enabled!(log::Level::Debug) {
+-                    log::debug!("Resolved files: {files:#?}");
+-                }
+-                return;
+-            }
+-
+-            let out_dir = matches
+-                .get_one::<PathBuf>("directory")
+-                .map(|p| normalize_path(p, &current_dir));
+-
+-            let recursive = matches.get_flag("recursive");
+-            let backup = matches.get_flag("backup");
+-            let strip_metadata = matches.get_flag("strip");
+-            let quiet = matches.get_flag("quiet");
+-            let no_progress = matches.get_flag("no-progress");
+-            let output_metadata = matches.contains_id("metadata");
+-            let metadata_path = matches
+-                .get_one::<PathBuf>("metadata")
+-                .map(|p| normalize_path(p, &current_dir))
+-                .unwrap_or(PathBuf::from("metadata.json"));
+-
+-            let suffix = matches.get_one::<String>("suffix").cloned();
+-
+-            if quiet || no_progress {
+-                multi.set_draw_target(ProgressDrawTarget::hidden());
+-            }
+-
+-            let pb_main = multi.add(ProgressBar::new(file_count));
+-            pb_main.set_style(sty_main);
+-            if file_count <= 1 {
+-                pb_main.set_draw_target(ProgressDrawTarget::hidden());
+-            }
+-
+-            let paths: Vec<_> = get_paths(files, out_dir, suffix, recursive).collect();
+-            let limiter = ConcurrencyLimiter::new(threads);
+-
+-            rayon::scope(|s| {
+-                for (input, mut output) in paths {
+-                    let _permit = limiter.acquire();
+-                    let pb_main = pb_main.clone();
+-                    let multi = multi.clone();
+-                    let sty_aux_decode = sty_aux_decode.clone();
+-                    let sty_aux_operations = sty_aux_operations.clone();
+-                    let sty_aux_encode = sty_aux_encode.clone();
+-                    let state = Arc::clone(&state);
+-                    let current_dir = current_dir.clone();
+-                    s.spawn(move |_| {
+-                        let _permit = _permit;
+-                        let image_start_time = std::time::Instant::now();
+-
+-                        let pb = multi.add(ProgressBar::new_spinner());
+-                        pb.set_style(sty_aux_decode.clone());
+-                        pb.set_message(format!("{}", input.display()));
+-                        pb.enable_steady_tick(Duration::from_millis(100));
+-
+-                        // Advance progress bars on all exit paths (including early
+-                        // returns from handle_error!).
+-                        let _finish = FinishGuard {
+-                            pb: pb.clone(),
+-                            pb_main: pb_main.clone(),
+-                        };
+-
+-                        let mut ops: Vec<Box<dyn OperationsTrait>> = Vec::new();
+-
+-                        let input_size = handle_error!(input, input.metadata()).len();
+-                        let input_format = get_file_extension(&input);
+-                        let input_modified = get_file_modified_time(&input);
+-
+-                        let mut img = handle_error!(input, decode(&input));
+-                        let exif_metadata: Option<ExifMetadata> =
+-                            ExifMetadata::new_from_path(&input)
+-                                .ok()
+-                                .filter(|_| !strip_metadata);
+-
+-                        pb.set_style(sty_aux_operations.clone());
+-
+-                        // Extract zune-image properties
+-                        let (w, h) = img.dimensions();
+-                        let pixel_count = (w as u64) * (h as u64);
+-                        let aspect_ratio = w as f64 / h as f64;
+-                        let colorspace = img.colorspace();
+-                        let is_animated = img.is_animated();
+-                        let frame_count = img.frames_len();
+-                        let has_alpha = colorspace.has_alpha();
+-                        let channels = colorspace.num_components();
+-
+-                        let original_bit_depth = img.depth();
+-
+-                        let mut available_encoder =
+-                            handle_error!(input, encoder(subcommand, matches));
+-                        let output_format = available_encoder.to_extension().to_string();
+-
+-                        if let Some(ext) = output.extension() {
+-                            output.set_extension({
+-                                let mut os_str = ext.to_os_string();
+-                                os_str.push(".");
+-                                os_str.push(&output_format);
+-                                os_str
+-                            });
+-                        } else {
+-                            output.set_extension(&output_format);
+-                        }
+-
+-                        ops.push(Box::new(Depth::new(BitDepth::Eight)));
+-                        ops.push(Box::new(ColorspaceConv::new(ColorSpace::RGBA)));
+-
+-                        if strip_metadata || !SUPPORTS_EXIF.contains(&subcommand) {
+-                            ops.push(Box::new(AutoOrient));
+-                        }
+-
+-                        if strip_metadata || !SUPPORTS_ICC.contains(&subcommand) {
+-                            ops.push(Box::new(ApplySRGB));
+-                        }
+-
+-                        operations(matches, &img)
+-                            .into_iter()
+-                            .for_each(|(_, operations)| match operations.name() {
+-                                "quantize" => {
+-                                    ops.push(Box::new(ColorspaceConv::new(ColorSpace::RGBA)));
+-                                    ops.push(operations);
+-                                }
+-                                _ => {
+-                                    ops.push(operations);
+-                                }
+-                            });
+-
+-                        for op in ops {
+-                            handle_error!(input, op.execute_impl(&mut img));
+-                        }
+-
+-                        pb.set_style(sty_aux_encode.clone());
+-
+-                        if backup {
+-                            let backup_name = format!(
+-                                "{}@backup.{}",
+-                                input
+-                                    .file_stem()
+-                                    .and_then(|s| s.to_str())
+-                                    .unwrap_or("backup"),
+-                                input.extension().and_then(|s| s.to_str()).unwrap_or("bak"),
+-                            );
+-                            let backup_path = input.with_file_name(&backup_name);
+-                            handle_error!(input, fs::rename(&input, backup_path));
+-                        }
+-
+-                        if let Some(parent) = output.parent() {
+-                            handle_error!(output, fs::create_dir_all(parent));
+-                        }
+-                        let output_file = handle_error!(output, File::create(&output));
+-
+-                        handle_error!(output, available_encoder.encode(&img, output_file));
+-
+-                        if let Some(actual_metadata) = exif_metadata {
+-                            match actual_metadata.write_to_file(&output) {
+-                                Ok(_) => {}
+-                                Err(e) => log::error!("{}", e),
+-                            }
+-                        }
+-
+-                        let output_size = handle_error!(output, output.metadata()).len();
+-                        let processing_time = image_start_time.elapsed().as_millis();
+-                        let compression_ratio = output_size as f64 / input_size as f64;
+-                        let space_saved = input_size as i64 - output_size as i64;
+-                        let processed_at = get_current_timestamp();
+-                        let output_created = get_current_timestamp();
+-
+-                        let mut state = state.lock().unwrap();
+-
+-                        let absolute_input_path = normalize_path(&input, &current_dir);
+-                        let absolute_output_path = normalize_path(&output, &current_dir);
+-
+-                        state.results.push(Result {
+-                            output: output.to_path_buf(),
+-                            input_size,
+-                            output_size,
+-                        });
+-
+-                        let metadata = state.metadata.get_or_insert(Metadata {
+-                            input_size: 0,
+-                            output_size: 0,
+-                            total_images: 0,
+-                            compression_ratio: 0.0,
+-                            space_saved: 0,
+-                            timestamp: get_current_timestamp(),
+-                            images: vec![],
+-                        });
+-
+-                        metadata.input_size += input_size;
+-                        metadata.output_size += output_size;
+-                        metadata.total_images += 1;
+-                        metadata.space_saved += space_saved;
+-
+-                        metadata.images.push(ImageMetadata {
+-                            input: absolute_input_path,
+-                            output: absolute_output_path,
+-                            input_size,
+-                            output_size,
+-                            compression_ratio,
+-                            space_saved,
+-                            width: w as u32,
+-                            height: h as u32,
+-                            pixel_count,
+-                            aspect_ratio,
+-                            bit_depth: bit_depth_to_string(&original_bit_depth),
+-                            color_space: colorspace_to_string(&colorspace),
+-                            has_alpha,
+-                            is_animated,
+-                            frame_count,
+-                            channels,
+-                            input_format,
+-                            output_format,
+-                            processed_at,
+-                            processing_time_ms: processing_time,
+-                            input_modified,
+-                            output_created,
+-                        });
+-                    });
+-                }
+-            });
+-
+-            let mut state = state.lock().unwrap();
+-
+-            // Update final metadata calculations
+-            if let Some(ref mut meta) = state.metadata.as_mut() {
+-                meta.compression_ratio = if meta.input_size > 0 {
+-                    meta.output_size as f64 / meta.input_size as f64
+-                } else {
+-                    0.0
+-                };
+-            }
+-
+-            state
+-                .results
+-                .sort_by_key(|b| std::cmp::Reverse(b.output_size));
+-
+-            let path_width = state
+-                .results
+-                .iter()
+-                .map(|r| r.output.display().to_string().len())
+-                .max()
+-                .unwrap_or(0);
+-
+-            if !quiet {
+-                let term = Term::stdout();
+-
+-                if state.results.len() > 1 {
+-                    term.write_line(&format!(
+-                        "{:<path_width$} {}",
+-                        style("File").bold(),
+-                        style("Size").bold(),
+-                    ))
+-                    .unwrap();
+-
+-                    for result in state.results.iter() {
+-                        let difference =
+-                            (result.output_size as f64 / result.input_size as f64) * 100.0;
+-
+-                        term.write_line(&format!(
+-                            "{:<path_width$} {} > {} {}",
+-                            result.output.display(),
+-                            style(DecimalBytes(result.input_size)).blue(),
+-                            style(DecimalBytes(result.output_size)).blue(),
+-                            if difference > 100.0 {
+-                                style(format!("{:.2}%", difference - 100.0)).red()
+-                            } else {
+-                                style(format!("{:.2}%", difference - 100.0)).green()
+-                            },
+-                        ))
+-                        .unwrap();
+-                    }
+-                }
+-
+-                let total_input_size = state.results.iter().map(|r| r.input_size).sum::<u64>();
+-                let total_output_size = state.results.iter().map(|r| r.output_size).sum::<u64>();
+-
+-                let difference = (total_output_size as f64 / total_input_size as f64) * 100.0;
+-
+-                term.write_line(&format!(
+-                    "Total: {} > {} {}",
+-                    style(DecimalBytes(total_input_size)).blue(),
+-                    style(DecimalBytes(total_output_size)).blue(),
+-                    if difference > 100.0 {
+-                        style(format!("{:.2}%", difference - 100.0)).red()
+-                    } else {
+-                        style(format!("{:.2}%", difference - 100.0)).green()
+-                    },
+-                ))
+-                .unwrap();
+-            }
+-
+-            let rust_log_hint = if cfg!(windows) {
+-                r#"$env:RUST_LOG="debug""#
+-            } else {
+-                "RUST_LOG=debug"
+-            };
+-            let succeeded = state.results.len() as u64;
+-            if succeeded < file_count {
+-                log::error!(
+-                    "{}/{} file(s) failed. Run with `{}` for details.",
+-                    file_count - succeeded,
+-                    file_count,
+-                    rust_log_hint
+-                );
+-            }
+-
+-            if output_metadata && let Some(metadata) = state.metadata.as_ref() {
+-                let json = serde_json::to_string_pretty(metadata).unwrap();
+-                fs::write(metadata_path, json).unwrap();
+-            }
+-        }
+-        None => unreachable!("clap ensures a subcommand is always provided"),
+-    }
+-}
+-
+-#[cfg(test)]
+-mod tests {
+-    use super::*;
+-
+-    fn test_base() -> PathBuf {
+-        if cfg!(windows) {
+-            PathBuf::from(r"D:\projects\rimage")
+-        } else {
+-            PathBuf::from("/projects/rimage")
+-        }
+-    }
+-
+-    fn test_base_src() -> PathBuf {
+-        if cfg!(windows) {
+-            PathBuf::from(r"D:\projects\rimage\src")
+-        } else {
+-            PathBuf::from("/projects/rimage/src")
+-        }
+-    }
+-
+-    #[test]
+-    fn join_normalized_strips_curdir() {
+-        let base = test_base();
+-        let rel = Path::new("./1.jpg");
+-        let result = join_normalized(&base, rel);
+-        assert_eq!(result, base.join("1.jpg"));
+-    }
+-
+-    #[test]
+-    fn join_normalized_resolves_parentdir() {
+-        let base = test_base_src();
+-        let rel = Path::new("../tests/1.jpg");
+-        let result = join_normalized(&base, rel);
+-        let expected = base.parent().unwrap().join("tests/1.jpg");
+-        assert_eq!(result, expected);
+-    }
+-
+-    #[test]
+-    fn join_normalized_handles_deep_path() {
+-        let base = test_base();
+-        let rel = Path::new("subdir/./other/../1.jpg");
+-        let result = join_normalized(&base, rel);
+-        let expected = base.join("subdir").join("1.jpg");
+-        assert_eq!(result, expected);
+-    }
+-}
++use std::{
++    fs::{self, File},
++    path::{Path, PathBuf},
++    sync::{Arc, Condvar, Mutex},
++    time::{Duration, SystemTime, UNIX_EPOCH},
++};
++
++use cli::{
++    cli,
++    pipeline::{decode, operations},
++    utils::paths::{collect_files, get_paths},
++};
++use console::{Term, style};
++use indicatif::{DecimalBytes, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
++use indicatif_log_bridge::LogWrapper;
++use little_exif::metadata::Metadata as ExifMetadata;
++use rimage::operations::icc::ApplySRGB;
++use serde::{Deserialize, Serialize};
++use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace};
++use zune_image::{
++    core_filters::{colorspace::ColorspaceConv, depth::Depth},
++    traits::OperationsTrait,
++};
++use zune_imageprocs::auto_orient::AutoOrient;
++
++use crate::cli::pipeline::encoder;
++
++mod cli;
++
++const DEBUG: bool = cfg!(debug_assertions);
++
++macro_rules! handle_error {
++    ( $path:expr, $e:expr ) => {
++        match $e {
++            Ok(v) => v,
++            Err(e) => {
++                log::error!("{}: {e}", $path.display());
++                return;
++            }
++        }
++    };
++}
++
++const SUPPORTS_EXIF: &[&str; 7] = &["mozjpeg", "oxipng", "png", "jpeg", "jpegxl", "tiff", "webp"];
++const SUPPORTS_ICC: &[&str; 2] = &["mozjpeg", "oxipng"];
++
++struct Result {
++    output: PathBuf,
++    input_size: u64,
++    output_size: u64,
++}
++
++struct ProcessingState {
++    results: Vec<Result>,
++    metadata: Option<Metadata>,
++}
++
++impl ProcessingState {
++    fn new() -> Self {
++        Self {
++            results: vec![],
++            metadata: None,
++        }
++    }
++}
++
++/// Limits concurrent image processing to prevent OOM with large images.
++///
++/// A `Mutex<isize>` + `Condvar` permit counter. The main thread calls
++/// [`acquire`](ConcurrencyLimiter::acquire) before spawning work; if the
++/// counter is at 0 the call blocks. When the returned [`PermitGuard`] is
++/// dropped, the permit is returned and a blocked waiter is woken.
++struct ConcurrencyLimiter {
++    inner: Arc<(Mutex<isize>, Condvar)>,
++}
++
++impl ConcurrencyLimiter {
++    fn new(max: usize) -> Self {
++        Self {
++            inner: Arc::new((Mutex::new(max as isize), Condvar::new())),
++        }
++    }
++
++    fn acquire(&self) -> PermitGuard {
++        let (ref lock, ref cvar) = *self.inner;
++        let mut count = lock.lock().unwrap();
++        while *count <= 0 {
++            count = cvar.wait(count).unwrap();
++        }
++        *count -= 1;
++        PermitGuard {
++            inner: Arc::clone(&self.inner),
++        }
++    }
++}
++
++struct PermitGuard {
++    inner: Arc<(Mutex<isize>, Condvar)>,
++}
++
++impl Drop for PermitGuard {
++    fn drop(&mut self) {
++        let (ref lock, ref cvar) = *self.inner;
++        let mut count = lock.lock().unwrap();
++        *count += 1;
++        cvar.notify_one();
++    }
++}
++
++/// RAII guard that updates progress bars on drop, ensuring they advance
++/// even when a worker returns early due to an error.
++struct FinishGuard {
++    pb: ProgressBar,
++    pb_main: ProgressBar,
++}
++
++impl Drop for FinishGuard {
++    fn drop(&mut self) {
++        self.pb.finish_and_clear();
++        self.pb_main.inc(1);
++    }
++}
++
++#[derive(Debug, Serialize, Deserialize, Clone)]
++struct Metadata {
++    #[serde(rename = "inputSize")]
++    input_size: u64,
++    #[serde(rename = "outputSize")]
++    output_size: u64,
++    #[serde(rename = "totalImages")]
++    total_images: usize,
++    #[serde(rename = "compressionRatio")]
++    compression_ratio: f64,
++    #[serde(rename = "spaceSaved")]
++    space_saved: i64,
++    timestamp: u64,
++    images: Vec<ImageMetadata>,
++}
++
++#[derive(Debug, Serialize, Deserialize, Clone)]
++struct ImageMetadata {
++    // File paths
++    input: PathBuf,
++    output: PathBuf,
++
++    // File information
++    #[serde(rename = "inputSize")]
++    input_size: u64,
++    #[serde(rename = "outputSize")]
++    output_size: u64,
++    #[serde(rename = "compressionRatio")]
++    compression_ratio: f64,
++    #[serde(rename = "spaceSaved")]
++    space_saved: i64,
++
++    // Image properties
++    width: u32,
++    height: u32,
++    #[serde(rename = "pixelCount")]
++    pixel_count: u64,
++    #[serde(rename = "aspectRatio")]
++    aspect_ratio: f64,
++
++    // zune-image specific properties
++    #[serde(rename = "bitDepth")]
++    bit_depth: String,
++    #[serde(rename = "colorSpace")]
++    color_space: String,
++    #[serde(rename = "hasAlpha")]
++    has_alpha: bool,
++    #[serde(rename = "isAnimated")]
++    is_animated: bool,
++    #[serde(rename = "frameCount")]
++    frame_count: usize,
++    channels: usize,
++
++    // Format information
++    #[serde(rename = "inputFormat")]
++    input_format: Option<String>,
++    #[serde(rename = "outputFormat")]
++    output_format: String,
++
++    // Processing information
++    #[serde(rename = "processedAt")]
++    processed_at: u64,
++    #[serde(rename = "processingTimeMs")]
++    processing_time_ms: u128,
++
++    // File timestamps
++    #[serde(rename = "inputModified")]
++    input_modified: Option<u64>,
++    #[serde(rename = "outputCreated")]
++    output_created: u64,
++}
++
++fn get_file_extension(path: &Path) -> Option<String> {
++    path.extension()
++        .and_then(|ext| ext.to_str())
++        .map(|s| s.to_lowercase())
++}
++
++fn get_file_modified_time(path: &Path) -> Option<u64> {
++    fs::metadata(path)
++        .ok()
++        .and_then(|metadata| metadata.modified().ok())
++        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
++        .map(|duration| duration.as_secs())
++}
++
++fn get_current_timestamp() -> u64 {
++    SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_secs()
++}
++
++fn bit_depth_to_string(depth: &BitDepth) -> String {
++    match depth {
++        BitDepth::Eight => "8-bit".to_string(),
++        BitDepth::Sixteen => "16-bit".to_string(),
++        BitDepth::Float32 => "32-bit float".to_string(),
++        _ => "未知".to_string(),
++    }
++}
++
++fn colorspace_to_string(colorspace: &ColorSpace) -> String {
++    match colorspace {
++        ColorSpace::RGB => "RGB".to_string(),
++        ColorSpace::RGBA => "RGBA".to_string(),
++        ColorSpace::Luma => "Grayscale".to_string(),
++        ColorSpace::LumaA => "Grayscale with Alpha".to_string(),
++        ColorSpace::YCbCr => "YCbCr".to_string(),
++        ColorSpace::YCCK => "YCCK".to_string(),
++        ColorSpace::CMYK => "CMYK".to_string(),
++        ColorSpace::BGR => "BGR".to_string(),
++        ColorSpace::BGRA => "BGRA".to_string(),
++        ColorSpace::HSL => "HSL".to_string(),
++        ColorSpace::HSV => "HSV".to_string(),
++        _ => "未知".to_string(),
++    }
++}
++
++/// Normalize a user-provided file path into its canonical absolute form.
++///
++/// Handles:
++/// - Expanding `~` to the home directory
++/// - Resolving relative paths (`.`, `..`) against the current directory
++///   using component-level joining — avoids `Path::join` which leaves
++///   `./` and `../` literals in the joined result
++/// - Canonicalizing existing paths (resolves symlinks, case, remaining `..`)
++/// - Preserving UNC/verbatim prefixes on Windows
++fn normalize_path(path: &Path, current_dir: &Path) -> PathBuf {
++    if path.as_os_str().is_empty() {
++        return path.to_path_buf();
++    }
++
++    // Expand ~ in the path string
++    let path = expand_tilde_in_path(path);
++
++    // Detect absolute paths (including Windows UNC/verbatim prefixes)
++    let is_absolute = path.is_absolute()
++        || path
++            .components()
++            .next()
++            .is_some_and(|c| matches!(c, std::path::Component::Prefix(_)));
++
++    let path = if is_absolute {
++        path
++    } else {
++        join_normalized(current_dir, &path)
++    };
++
++    // Canonicalize if the path exists (resolves symlinks, remaining .., case).
++    // Non-existent paths (output dirs) keep the component-normalized form.
++    path.canonicalize().unwrap_or(path)
++}
++
++/// Join a base path with a relative path, normalizing `.` and `..` components.
++///
++/// Unlike `Path::join`, this resolves `./foo` to `base/foo` instead of
++/// `base/./foo`, and correctly handles `../` by popping the parent.
++fn join_normalized(base: &Path, relative: &Path) -> PathBuf {
++    let mut result = base.to_path_buf();
++    for c in relative.components() {
++        match c {
++            std::path::Component::CurDir => {}
++            std::path::Component::ParentDir => {
++                result.pop();
++            }
++            other => result.push(other),
++        }
++    }
++    result
++}
++
++/// Expand a leading `~` in a path to the user's home directory.
++///
++/// On Unix: uses `HOME` env var.
++/// On Windows: uses `USERPROFILE` env var.
++/// Falls back to the original path if the env var is unset.
++fn expand_tilde_in_path(path: &Path) -> PathBuf {
++    let s = match path.to_str() {
++        Some(s) => s,
++        None => return path.to_path_buf(),
++    };
++
++    if !s.starts_with('~') {
++        return path.to_path_buf();
++    }
++
++    #[cfg(windows)]
++    let home_var = "USERPROFILE";
++    #[cfg(not(windows))]
++    let home_var = "HOME";
++
++    let home_dir = match std::env::var(home_var) {
++        Ok(h) => PathBuf::from(h),
++        Err(_) => return path.to_path_buf(),
++    };
++
++    if s == "~" {
++        return home_dir;
++    }
++
++    // "~/..." → home_dir/...
++    let after_tilde = &s[1..]; // skip '~'
++    let trimmed = after_tilde.trim_start_matches(['/', '\\']);
++    if trimmed.len() < after_tilde.len() {
++        join_normalized(&home_dir, Path::new(trimmed))
++    } else {
++        // "~something" is not a home directory reference
++        path.to_path_buf()
++    }
++}
++
++fn main() {
++    let logger = pretty_env_logger::formatted_builder()
++        .parse_default_env()
++        .filter_module("little_exif", log::LevelFilter::Off)
++        .build();
++    let level = logger.filter();
++
++    let multi = MultiProgress::new();
++    let sty_main = ProgressStyle::with_template("{bar:40.green/yellow} {pos:>4}/{len:4}")
++        .unwrap()
++        .progress_chars("▬▬▬");
++    let sty_aux_decode = ProgressStyle::with_template("{spinner:.blue} {msg}").unwrap();
++    let sty_aux_operations = ProgressStyle::with_template("{spinner:.yellow} {msg}").unwrap();
++    let sty_aux_encode = ProgressStyle::with_template("{spinner:.green} {msg}").unwrap();
++
++    LogWrapper::new(multi.clone(), logger).try_init().unwrap();
++    log::set_max_level(level);
++
++    let current_dir = std::env::current_dir().unwrap_or_default();
++    let matches = cli().get_matches_from(std::env::args());
++
++    let state: Arc<Mutex<ProcessingState>> = Arc::new(Mutex::new(ProcessingState::new()));
++
++    match matches.subcommand() {
++        Some((subcommand, matches)) => {
++            let threads = matches.get_one::<u8>("threads").copied().unwrap_or(1) as usize;
++            rayon::ThreadPoolBuilder::new()
++                .num_threads(threads)
++                .build_global()
++                .unwrap();
++
++            // Normalize file paths: resolve ~, relative paths, canonicalize
++            let files: Vec<PathBuf> = matches
++                .get_many::<PathBuf>("files")
++                .expect("`files`是必须的")
++                .map(|p| normalize_path(p, &current_dir))
++                .collect();
++            let files = collect_files(&files);
++            if DEBUG {
++                dbg!(&files);
++            }
++
++            let file_count = files.iter().filter(|f| f.is_file()).count() as u64;
++
++            if file_count == 0 {
++                log::error!("未找到输入文件. 请检查文件路径");
++                if log::log_enabled!(log::Level::Debug) {
++                    log::debug!("已解析文件: {files:#?}");
++                }
++                return;
++            }
++
++            let out_dir = matches
++                .get_one::<PathBuf>("directory")
++                .map(|p| normalize_path(p, &current_dir));
++
++            let recursive = matches.get_flag("recursive");
++            let backup = matches.get_flag("backup");
++            let strip_metadata = matches.get_flag("strip");
++            let quiet = matches.get_flag("quiet");
++            let no_progress = matches.get_flag("no-progress");
++            let output_metadata = matches.contains_id("metadata");
++            let metadata_path = matches
++                .get_one::<PathBuf>("metadata")
++                .map(|p| normalize_path(p, &current_dir))
++                .unwrap_or(PathBuf::from("metadata.json"));
++
++            let suffix = matches.get_one::<String>("suffix").cloned();
++
++            if quiet || no_progress {
++                multi.set_draw_target(ProgressDrawTarget::hidden());
++            }
++
++            let pb_main = multi.add(ProgressBar::new(file_count));
++            pb_main.set_style(sty_main);
++            if file_count <= 1 {
++                pb_main.set_draw_target(ProgressDrawTarget::hidden());
++            }
++
++            let paths: Vec<_> = get_paths(files, out_dir, suffix, recursive).collect();
++            let limiter = ConcurrencyLimiter::new(threads);
++
++            rayon::scope(|s| {
++                for (input, mut output) in paths {
++                    let _permit = limiter.acquire();
++                    let pb_main = pb_main.clone();
++                    let multi = multi.clone();
++                    let sty_aux_decode = sty_aux_decode.clone();
++                    let sty_aux_operations = sty_aux_operations.clone();
++                    let sty_aux_encode = sty_aux_encode.clone();
++                    let state = Arc::clone(&state);
++                    let current_dir = current_dir.clone();
++                    s.spawn(move |_| {
++                        let _permit = _permit;
++                        let image_start_time = std::time::Instant::now();
++
++                        let pb = multi.add(ProgressBar::new_spinner());
++                        pb.set_style(sty_aux_decode.clone());
++                        pb.set_message(format!("{}", input.display()));
++                        pb.enable_steady_tick(Duration::from_millis(100));
++
++                        // Advance progress bars on all exit paths (including early
++                        // returns from handle_error!).
++                        let _finish = FinishGuard {
++                            pb: pb.clone(),
++                            pb_main: pb_main.clone(),
++                        };
++
++                        let mut ops: Vec<Box<dyn OperationsTrait>> = Vec::new();
++
++                        let input_size = handle_error!(input, input.metadata()).len();
++                        let input_format = get_file_extension(&input);
++                        let input_modified = get_file_modified_time(&input);
++
++                        let mut img = handle_error!(input, decode(&input));
++                        let exif_metadata: Option<ExifMetadata> =
++                            ExifMetadata::new_from_path(&input)
++                                .ok()
++                                .filter(|_| !strip_metadata);
++
++                        pb.set_style(sty_aux_operations.clone());
++
++                        // Extract zune-image properties
++                        let (w, h) = img.dimensions();
++                        let pixel_count = (w as u64) * (h as u64);
++                        let aspect_ratio = w as f64 / h as f64;
++                        let colorspace = img.colorspace();
++                        let is_animated = img.is_animated();
++                        let frame_count = img.frames_len();
++                        let has_alpha = colorspace.has_alpha();
++                        let channels = colorspace.num_components();
++
++                        let original_bit_depth = img.depth();
++
++                        let mut available_encoder =
++                            handle_error!(input, encoder(subcommand, matches));
++                        let output_format = available_encoder.to_extension().to_string();
++
++                        if let Some(ext) = output.extension() {
++                            output.set_extension({
++                                let mut os_str = ext.to_os_string();
++                                os_str.push(".");
++                                os_str.push(&output_format);
++                                os_str
++                            });
++                        } else {
++                            output.set_extension(&output_format);
++                        }
++
++                        ops.push(Box::new(Depth::new(BitDepth::Eight)));
++                        ops.push(Box::new(ColorspaceConv::new(ColorSpace::RGBA)));
++
++                        if strip_metadata || !SUPPORTS_EXIF.contains(&subcommand) {
++                            ops.push(Box::new(AutoOrient));
++                        }
++
++                        if strip_metadata || !SUPPORTS_ICC.contains(&subcommand) {
++                            ops.push(Box::new(ApplySRGB));
++                        }
++
++                        operations(matches, &img)
++                            .into_iter()
++                            .for_each(|(_, operations)| match operations.name() {
++                                "quantize" => {
++                                    ops.push(Box::new(ColorspaceConv::new(ColorSpace::RGBA)));
++                                    ops.push(operations);
++                                }
++                                _ => {
++                                    ops.push(operations);
++                                }
++                            });
++
++                        for op in ops {
++                            handle_error!(input, op.execute_impl(&mut img));
++                        }
++
++                        pb.set_style(sty_aux_encode.clone());
++
++                        if backup {
++                            let backup_name = format!(
++                                "{}@backup.{}",
++                                input
++                                    .file_stem()
++                                    .and_then(|s| s.to_str())
++                                    .unwrap_or("backup"),
++                                input.extension().and_then(|s| s.to_str()).unwrap_or("bak"),
++                            );
++                            let backup_path = input.with_file_name(&backup_name);
++                            handle_error!(input, fs::rename(&input, backup_path));
++                        }
++
++                        if let Some(parent) = output.parent() {
++                            handle_error!(output, fs::create_dir_all(parent));
++                        }
++                        let output_file = handle_error!(output, File::create(&output));
++
++                        handle_error!(output, available_encoder.encode(&img, output_file));
++
++                        if let Some(actual_metadata) = exif_metadata {
++                            match actual_metadata.write_to_file(&output) {
++                                Ok(_) => {}
++                                Err(e) => log::error!("{}", e),
++                            }
++                        }
++
++                        let output_size = handle_error!(output, output.metadata()).len();
++                        let processing_time = image_start_time.elapsed().as_millis();
++                        let compression_ratio = output_size as f64 / input_size as f64;
++                        let space_saved = input_size as i64 - output_size as i64;
++                        let processed_at = get_current_timestamp();
++                        let output_created = get_current_timestamp();
++
++                        let mut state = state.lock().unwrap();
++
++                        let absolute_input_path = normalize_path(&input, &current_dir);
++                        let absolute_output_path = normalize_path(&output, &current_dir);
++
++                        state.results.push(Result {
++                            output: output.to_path_buf(),
++                            input_size,
++                            output_size,
++                        });
++
++                        let metadata = state.metadata.get_or_insert(Metadata {
++                            input_size: 0,
++                            output_size: 0,
++                            total_images: 0,
++                            compression_ratio: 0.0,
++                            space_saved: 0,
++                            timestamp: get_current_timestamp(),
++                            images: vec![],
++                        });
++
++                        metadata.input_size += input_size;
++                        metadata.output_size += output_size;
++                        metadata.total_images += 1;
++                        metadata.space_saved += space_saved;
++
++                        metadata.images.push(ImageMetadata {
++                            input: absolute_input_path,
++                            output: absolute_output_path,
++                            input_size,
++                            output_size,
++                            compression_ratio,
++                            space_saved,
++                            width: w as u32,
++                            height: h as u32,
++                            pixel_count,
++                            aspect_ratio,
++                            bit_depth: bit_depth_to_string(&original_bit_depth),
++                            color_space: colorspace_to_string(&colorspace),
++                            has_alpha,
++                            is_animated,
++                            frame_count,
++                            channels,
++                            input_format,
++                            output_format,
++                            processed_at,
++                            processing_time_ms: processing_time,
++                            input_modified,
++                            output_created,
++                        });
++                    });
++                }
++            });
++
++            let mut state = state.lock().unwrap();
++
++            // Update final metadata calculations
++            if let Some(ref mut meta) = state.metadata.as_mut() {
++                meta.compression_ratio = if meta.input_size > 0 {
++                    meta.output_size as f64 / meta.input_size as f64
++                } else {
++                    0.0
++                };
++            }
++
++            state
++                .results
++                .sort_by_key(|b| std::cmp::Reverse(b.output_size));
++
++            let path_width = state
++                .results
++                .iter()
++                .map(|r| r.output.display().to_string().len())
++                .max()
++                .unwrap_or(0);
++
++            if !quiet {
++                let term = Term::stdout();
++
++                if state.results.len() > 1 {
++                    term.write_line(&format!(
++                        "{:<path_width$} {}",
++                        style("文件").bold(),
++                        style("大小").bold(),
++                    ))
++                    .unwrap();
++
++                    for result in state.results.iter() {
++                        let difference =
++                            (result.output_size as f64 / result.input_size as f64) * 100.0;
++
++                        term.write_line(&format!(
++                            "{:<path_width$} {} > {} {}",
++                            result.output.display(),
++                            style(DecimalBytes(result.input_size)).blue(),
++                            style(DecimalBytes(result.output_size)).blue(),
++                            if difference > 100.0 {
++                                style(format!("{:.2}%", difference - 100.0)).red()
++                            } else {
++                                style(format!("{:.2}%", difference - 100.0)).green()
++                            },
++                        ))
++                        .unwrap();
++                    }
++                }
++
++                let total_input_size = state.results.iter().map(|r| r.input_size).sum::<u64>();
++                let total_output_size = state.results.iter().map(|r| r.output_size).sum::<u64>();
++
++                let difference = (total_output_size as f64 / total_input_size as f64) * 100.0;
++
++                term.write_line(&format!(
++                    "总计: {} > {} {}",
++                    style(DecimalBytes(total_input_size)).blue(),
++                    style(DecimalBytes(total_output_size)).blue(),
++                    if difference > 100.0 {
++                        style(format!("{:.2}%", difference - 100.0)).red()
++                    } else {
++                        style(format!("{:.2}%", difference - 100.0)).green()
++                    },
++                ))
++                .unwrap();
++            }
++
++            let rust_log_hint = if cfg!(windows) {
++                r#"$env:RUST_LOG="debug""#
++            } else {
++                "RUST_LOG=debug"
++            };
++            let succeeded = state.results.len() as u64;
++            if succeeded < file_count {
++                log::error!(
++                    "{}/{} 个文件失败. 运行 `{}` 获取详情.",
++                    file_count - succeeded,
++                    file_count,
++                    rust_log_hint
++                );
++            }
++
++            if output_metadata && let Some(metadata) = state.metadata.as_ref() {
++                let json = serde_json::to_string_pretty(metadata).unwrap();
++                fs::write(metadata_path, json).unwrap();
++            }
++        }
++        None => unreachable!("clap 确保始终提供子命令"),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn test_base() -> PathBuf {
++        if cfg!(windows) {
++            PathBuf::from(r"D:\projects\rimage")
++        } else {
++            PathBuf::from("/projects/rimage")
++        }
++    }
++
++    fn test_base_src() -> PathBuf {
++        if cfg!(windows) {
++            PathBuf::from(r"D:\projects\rimage\src")
++        } else {
++            PathBuf::from("/projects/rimage/src")
++        }
++    }
++
++    #[test]
++    fn join_normalized_strips_curdir() {
++        let base = test_base();
++        let rel = Path::new("./1.jpg");
++        let result = join_normalized(&base, rel);
++        assert_eq!(result, base.join("1.jpg"));
++    }
++
++    #[test]
++    fn join_normalized_resolves_parentdir() {
++        let base = test_base_src();
++        let rel = Path::new("../tests/1.jpg");
++        let result = join_normalized(&base, rel);
++        let expected = base.parent().unwrap().join("tests/1.jpg");
++        assert_eq!(result, expected);
++    }
++
++    #[test]
++    fn join_normalized_handles_deep_path() {
++        let base = test_base();
++        let rel = Path::new("subdir/./other/../1.jpg");
++        let result = join_normalized(&base, rel);
++        let expected = base.join("subdir").join("1.jpg");
++        assert_eq!(result, expected);
++    }
++}
+diff --git a/src/operations/icc/mod.rs b/src/operations/icc/mod.rs
+index 07802a0..7ec5c9d 100644
+--- a/src/operations/icc/mod.rs
++++ b/src/operations/icc/mod.rs
+@@ -28,7 +28,7 @@ impl ApplyICC {
+ 
+ impl OperationsTrait for ApplyICC {
+     fn name(&self) -> &'static str {
+-        "apply icc profile"
++        "应用 ICC 配置文件"
+     }
+ 
+     fn execute_impl(&self, image: &mut Image) -> Result<(), ImageErrors> {
+@@ -64,7 +64,7 @@ impl OperationsTrait for ApplyICC {
+             (cs, depth) => {
+                 return Err(ImageErrors::OperationsError(
+                     ImageOperationsErrors::GenericString(format!(
+-                        "ICC profile application not supported for {cs:?} at {depth}-bit",
++                        "在 {depth}-bit 下不支持对 {cs:?} 应用 ICC 配置文件",
+                     )),
+                 ));
+             }
+@@ -73,7 +73,7 @@ impl OperationsTrait for ApplyICC {
+         let profile = self
+             .profile
+             .lock()
+-            .map_err(|_| ImageOperationsErrors::GenericString("Mutex poisoned".to_string()))?;
++            .map_err(|_| ImageOperationsErrors::GenericString("互斥锁已中毒".to_string()))?;
+ 
+         let t = Transform::new_flags(
+             &src_profile,
+@@ -125,12 +125,12 @@ pub struct ApplySRGB;
+ 
+ impl OperationsTrait for ApplySRGB {
+     fn name(&self) -> &'static str {
+-        "apply srgb profile"
++        "应用 srgb 配置文件"
+     }
+ 
+     fn execute_impl(&self, image: &mut Image) -> Result<(), ImageErrors> {
+         if image.metadata().icc_chunk().is_none() {
+-            log::warn!("No icc profile in the image, skipping");
++            log::warn!("图像中没有 icc 配置文件, 正在跳过");
+             return Ok(());
+         }
+ 
+diff --git a/src/operations/resize/mod.rs b/src/operations/resize/mod.rs
+index d5448e1..0216439 100644
+--- a/src/operations/resize/mod.rs
++++ b/src/operations/resize/mod.rs
+@@ -33,7 +33,7 @@ impl Resize {
+ 
+ impl OperationsTrait for Resize {
+     fn name(&self) -> &'static str {
+-        "fast resize"
++        "快速调整大小"
+     }
+ 
+     fn execute_impl(&self, image: &mut Image) -> Result<(), ImageErrors> {
+@@ -41,7 +41,7 @@ impl OperationsTrait for Resize {
+         let (dst_width, dst_height) = self.new_dimensions;
+         if (dst_height == 0) || (dst_width == 0) {
+             return Err(ImageErrors::OperationsError(
+-                ImageOperationsErrors::Generic("Width or Height cannot be 0"),
++                ImageOperationsErrors::Generic("宽度或高度不能为0"),
+             ));
+         }
+ 
