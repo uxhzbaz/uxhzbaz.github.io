@@ -2,24 +2,42 @@ diff --git a/Cargo.toml b/Cargo.toml
 index be3ed68..9c94717 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -5 +5 @@ edition       = "2024"
+@@ -2,7 +2,7 @@
+ name          = "rimage"
+ version       = "0.12.4"
+ edition       = "2024"
 -description   = "Optimize images natively with best-in-class codecs"
 +description   = "使用一流的编解码器原生优化图像"
+ license       = "MIT OR Apache-2.0"
+ readme        = "README.md"
+ authors       = ["Vladyslav Vladinov <vladinov.dev@gmail.com>"]
 diff --git a/build.rs b/build.rs
 index 58a67ad..687258a 100644
 --- a/build.rs
 +++ b/build.rs
-@@ -10 +10 @@ fn main() {
+@@ -7,7 +7,7 @@ fn main() {
+     if env::var("CARGO_CFG_TARGET_OS").unwrap() != "windows" {
+         println!(
+             "cargo:warning={:#?}",
 -            "This build script is only for windows target, skipping..."
 +            "此构建脚本仅适用于 windows 目标, 正在跳过..."
+         );
+         return;
+     }
 diff --git a/src/cli.rs b/src/cli.rs
 index 97762bb..21f05be 100644
 --- a/src/cli.rs
 +++ b/src/cli.rs
-@@ -1 +1 @@
+@@ -1,4 +1,4 @@
 -use clap::{Command, command};
 +use clap::{arg, Arg, ArgAction, Command, command};
-@@ -13,20 +13,42 @@ pub fn cli() -> Command {
+ use indoc::indoc;
+ 
+ use self::codecs::Codecs;
+@@ -10,35 +10,57 @@ pub mod preprocessors;
+ pub mod utils;
+ 
+ pub fn cli() -> Command {
 -    command!()
 -        .arg_required_else_help(true)
 -        .after_help(indoc! {r#"
@@ -82,7 +100,7 @@ index 97762bb..21f05be 100644
 +| qoi           | O    | O    |                 |
 +| tiff          | O    | X    |                 |
 +| webp          | O    | O    | 仅限静态图像    |
-@@ -34,4 +56,4 @@ List of supported codecs
+ 
 -List of supported preprocessing options
 -- Resize
 -- Quantization
@@ -91,113 +109,152 @@ index 97762bb..21f05be 100644
 +- 调整大小
 +- 量化
 +- Alpha 预乘
-@@ -39,3 +61,3 @@ List of supported preprocessing options
+ 
 -List of supported mode for output info presenting
 -- No-progress (Shown on Default)
 -- Quiet (Show all msgs on Default)
 +支持的输出信息显示模式列表
 +- 无进度条 (默认不显示)
 +- 静默 (默认显示所有消息)
+ "#})
+         .codecs()
+ }
 diff --git a/src/cli/codecs/avif.rs b/src/cli/codecs/avif.rs
 index cf6c0ed..c8ff720 100644
 --- a/src/cli/codecs/avif.rs
 +++ b/src/cli/codecs/avif.rs
-@@ -8 +8 @@ pub fn avif() -> Command {
+@@ -5,24 +5,24 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn avif() -> Command {
+     Command::new("avif")
 -        .about("Encode images into AVIF format. (Small and Efficient)")
 +        .about("将图像编码为 AVIF 格式. (体积小且高效)")
-@@ -10 +10 @@ pub fn avif() -> Command {
+         .args([
 -            arg!(-q --quality <NUM> "Quality which the image will be encoded with.")
 +            arg!(-q --quality <NUM> "图像编码时的质量.")
-@@ -13 +13 @@ pub fn avif() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=100))
+                 .default_value("50"),
 -            arg!(--alpha_quality <NUM> "Separate alpha quality which the image will be encoded with.")
 +            arg!(--alpha_quality <NUM> "图像编码时单独的 alpha 质量.")
-@@ -15,2 +15,2 @@ pub fn avif() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=100)),
 -            arg!(--speed <NUM> "Compression speed (effort).")
 -                .long_help(indoc! {r#"Compression speed (effort).
 +            arg!(--speed <NUM> "压缩速度 (性能消耗).")
 +                .long_help(indoc! {r#"压缩速度 (性能消耗).
-@@ -18,2 +18,2 @@ pub fn avif() -> Command {
+ 
 -                1 = very very slow, but max compression (smallest)
 -                10 = quick, but larger file sizes and lower quality."#})
 +                1 = 非常非常慢, 压缩率最高 (体积最小)
 +                10 = 很快, 但文件体积较大且质量较低."#})
-@@ -22 +22 @@ pub fn avif() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=10))
+                 .default_value("6"),
 -            arg!(--colorspace <COLOR> "Set color space of AVIF being written.")
 +            arg!(--colorspace <COLOR> "设置写入的 AVIF 色彩空间.")
-@@ -25 +25 @@ pub fn avif() -> Command {
+                 .value_parser(["ycbcr", "rgb"])
+                 .default_value("ycbcr"),
 -            arg!(--alpha_mode <MODE> "Configure handling of color channels in transparent images.")
 +            arg!(--alpha_mode <MODE> "配置透明图像中颜色通道的处理方式.")
+                 .value_parser(["UnassociatedDirty", "UnassociatedClean", "Premultiplied"])
+                 .default_value("UnassociatedClean")
+         ]).common_args()
 diff --git a/src/cli/codecs/farbfeld.rs b/src/cli/codecs/farbfeld.rs
 index f3c0dcd..b75d96e 100644
 --- a/src/cli/codecs/farbfeld.rs
 +++ b/src/cli/codecs/farbfeld.rs
-@@ -7 +7 @@ pub fn farbfeld() -> Command {
+@@ -4,6 +4,6 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn farbfeld() -> Command {
+     Command::new("farbfeld")
 -        .about("Encode images into Farbfeld format. (Bitmapped)")
 +        .about("将图像编码为 Farbfeld 格式. (位图)")
+         .common_args()
+ }
 diff --git a/src/cli/codecs/jpeg.rs b/src/cli/codecs/jpeg.rs
 index ac45daa..d1d20d9 100644
 --- a/src/cli/codecs/jpeg.rs
 +++ b/src/cli/codecs/jpeg.rs
-@@ -8 +8 @@ pub fn jpeg() -> Command {
+@@ -5,11 +5,11 @@ use crate::cli::common::CommonArgs;
+ pub fn jpeg() -> Command {
+     Command::new("jpeg")
+         .alias("jpg")
 -        .about("Encode images into JPEG format. (Progressive-able)")
 +        .about("将图像编码为 JPEG 格式. (支持渐进式)")
-@@ -10 +10 @@ pub fn jpeg() -> Command {
+         .args([
 -            arg!(-q --quality <NUM> "Quality which the image will be encoded with.")
 +            arg!(-q --quality <NUM> "图像编码时的质量.")
-@@ -12 +12 @@ pub fn jpeg() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=100)),
 -            arg!(--progressive "Set to use progressive encoding."),
 +            arg!(--progressive "设置为使用渐进式编码."),
+         ])
+         .common_args()
+ }
 diff --git a/src/cli/codecs/jpeg_xl.rs b/src/cli/codecs/jpeg_xl.rs
 index b2875c5..b1b3bea 100644
 --- a/src/cli/codecs/jpeg_xl.rs
 +++ b/src/cli/codecs/jpeg_xl.rs
-@@ -9,2 +9,2 @@ pub fn jpeg_xl() -> Command {
+@@ -6,9 +6,9 @@ use crate::cli::common::CommonArgs;
+ pub fn jpeg_xl() -> Command {
+     Command::new("jpeg_xl")
+         .alias("jxl")
 -        .about("Encode images into JpegXL format. (Big but Lossless)")
 -        .long_about(indoc! {r#"Encode images into jpeg xl format.
 +        .about("将图像编码为 JpegXL 格式. (体积大但无损)")
 +        .long_about(indoc! {r#"图像编码为 jpeg xl 格式.
-@@ -12 +12 @@ pub fn jpeg_xl() -> Command {
+ 
 -        Only supports lossless encoding"#})
 +        仅支持无损编码"#})
+         .common_args()
+ }
 diff --git a/src/cli/codecs/mozjpeg.rs b/src/cli/codecs/mozjpeg.rs
 index 7920e68..a5816ff 100644
 --- a/src/cli/codecs/mozjpeg.rs
 +++ b/src/cli/codecs/mozjpeg.rs
-@@ -8 +8 @@ pub fn mozjpeg() -> Command {
+@@ -5,24 +5,24 @@ use crate::cli::common::CommonArgs;
+ pub fn mozjpeg() -> Command {
+     Command::new("mozjpeg")
+         .alias("moz")
 -        .about("Encode images into JPEG format using MozJpeg codec. (RECOMMENDED and Small)")
 +        .about("使用 MozJpeg 编解码器将图像编码为 JPEG 格式. (推荐且体积小)")
-@@ -10 +10 @@ pub fn mozjpeg() -> Command {
+         .args([
 -            arg!(-q --quality <NUM> "Quality, values 60-80 are recommended.")
 +            arg!(-q --quality <NUM> "质量, 推荐值为 60-80.")
-@@ -13 +13 @@ pub fn mozjpeg() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=100))
+                 .default_value("75"),
 -            arg!(--chroma_quality <NUM> "Separate chroma quality.")
 +            arg!(--chroma_quality <NUM> "单独的色度质量.")
-@@ -15,3 +15,3 @@ pub fn mozjpeg() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=100)),
 -            arg!(--baseline "Set to use baseline encoding (by default is progressive)."),
 -            arg!(--no_optimize_coding "Set to make files larger for no reason."),
 -            arg!(--smoothing <NUM> "Use MozJPEG's smoothing.")
 +            arg!(--baseline "设置为使用基线编码 (默认为渐进式)."),
 +            arg!(--no_optimize_coding "设置此项以无故增大文件体积."),
 +            arg!(--smoothing <NUM> "使用 MozJPEG 的平滑处理.")
-@@ -19 +19 @@ pub fn mozjpeg() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=100)),
 -            arg!(--colorspace <COLOR> "Set color space of JPEG being written.")
 +            arg!(--colorspace <COLOR> "设置写入的 JPEG 色彩空间.")
-@@ -22,2 +22,2 @@ pub fn mozjpeg() -> Command {
+                 .value_parser(["ycbcr", "grayscale", "rgb"])
+                 .default_value("ycbcr"),
 -            arg!(--multipass "Specifies whether multiple scans should be considered during trellis quantization."),
 -            arg!(--subsample <PIX> "Sets chroma subsampling.")
 +            arg!(--multipass "指定在网格量化期间是否应考虑多次扫描."),
 +            arg!(--subsample <PIX> "设置色度子采样.")
-@@ -25 +25 @@ pub fn mozjpeg() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=4)),
 -            arg!(--qtable <TABLE> "Use a specific quantization table.")
 +            arg!(--qtable <TABLE> "使用特定的量化表.")
+                 .value_parser([
+                     "AhumadaWatsonPeterson",
+                     "AnnexK",
 diff --git a/src/cli/codecs/oxipng.rs b/src/cli/codecs/oxipng.rs
 index 2bc24c3..c56ffe6 100644
 --- a/src/cli/codecs/oxipng.rs
 +++ b/src/cli/codecs/oxipng.rs
-@@ -9 +9 @@ pub fn oxipng() -> Command {
+@@ -6,21 +6,20 @@ use crate::cli::common::CommonArgs;
+ pub fn oxipng() -> Command {
+     Command::new("oxipng")
+         .alias("oxi")
 -        .about("Encode images into PNG format using OxiPNG codec. (Progressive-able)")
 +        .about("使用 OxiPNG 编解码器将图像编码为 PNG 格式. (支持渐进式)")
-@@ -11,5 +11,4 @@ pub fn oxipng() -> Command {
+         .args([
 -            arg!(--interlace "Set interlace mode (progressive)."),
 -            arg!(--effort <NUM> "Optimization level (0-6)").long_help(indoc! {r#"Set the optimization level preset.
 -            The default level 2 is quite fast and provides good compression.
@@ -207,7 +264,7 @@ index 2bc24c3..c56ffe6 100644
 +            arg!(--effort <NUM> "优化级别 (0-6)").long_help(indoc! {r#"设置优化级别预设.
 +默认级别 2 相当快并且提供良好的压缩.
 +            较低的级别更快, 较高的级别提供更好的压缩, 但收益递减.
-@@ -17,7 +16,7 @@ pub fn oxipng() -> Command {
+ 
 -            0   => (1 trial, determined heuristically)
 -            1   => (1 trial, determined heuristically)
 -            2   => (4 fast trials, 1 main trial)
@@ -222,47 +279,74 @@ index 2bc24c3..c56ffe6 100644
 +            4   => (4 次尝试)
 +            5   => (8 次尝试)
 +            6   => (10 次尝试)"#})
+             .value_parser(value_parser!(u8).range(0..=6))
+             .default_value("2"),
+         ]).common_args()
 diff --git a/src/cli/codecs/png.rs b/src/cli/codecs/png.rs
 index ee04849..6d2fcd4 100644
 --- a/src/cli/codecs/png.rs
 +++ b/src/cli/codecs/png.rs
-@@ -7 +7 @@ pub fn png() -> Command {
+@@ -4,6 +4,6 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn png() -> Command {
+     Command::new("png")
 -        .about("Encode images into PNG format.")
 +        .about("将图像编码为 PNG 格式.")
+         .common_args()
+ }
 diff --git a/src/cli/codecs/ppm.rs b/src/cli/codecs/ppm.rs
 index 71f3dfe..77d04cd 100644
 --- a/src/cli/codecs/ppm.rs
 +++ b/src/cli/codecs/ppm.rs
-@@ -7 +7 @@ pub fn ppm() -> Command {
+@@ -4,6 +4,6 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn ppm() -> Command {
+     Command::new("ppm")
 -        .about("Encode images into PPM format. (Bitmapped)")
 +        .about("将图像编码为 PPM 格式. (位图)")
+         .common_args()
+ }
 diff --git a/src/cli/codecs/qoi.rs b/src/cli/codecs/qoi.rs
 index 8b054e6..d6bd730 100644
 --- a/src/cli/codecs/qoi.rs
 +++ b/src/cli/codecs/qoi.rs
-@@ -7 +7 @@ pub fn qoi() -> Command {
+@@ -4,6 +4,6 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn qoi() -> Command {
+     Command::new("qoi")
 -        .about("Encode images into QOI format. (Trendy and Small)")
 +        .about("将图像编码为 QOI 格式. (新潮且体积小)")
+         .common_args()
+ }
 diff --git a/src/cli/codecs/webp.rs b/src/cli/codecs/webp.rs
 index 8794069..150b5fa 100644
 --- a/src/cli/codecs/webp.rs
 +++ b/src/cli/codecs/webp.rs
-@@ -7 +7 @@ pub fn webp() -> Command {
+@@ -4,18 +4,18 @@ use crate::cli::common::CommonArgs;
+ 
+ pub fn webp() -> Command {
+     Command::new("webp")
 -        .about("Encode images into WebP format. (Lossless-able)")
 +        .about("将图像编码为 WebP 格式. (支持无损)")
-@@ -9,2 +9,2 @@ pub fn webp() -> Command {
+         .args([
 -            arg!(--lossless "Encode image without quality loss.").conflicts_with_all(["quality"]),
 -            arg!(-q --quality <NUM> "Quality, values 60-80 are recommended.")
 +            arg!(--lossless "对图像进行无损编码.").conflicts_with_all(["quality"]),
 +            arg!(-q --quality <NUM> "质量, 推荐值为 60-80")
-@@ -13 +13 @@ pub fn webp() -> Command {
+                 .value_parser(value_parser!(u8).range(1..=100))
+                 .default_value("75"),
 -            arg!(--slight_loss <NUM> "Slight loss in quality for lossless encoding.")
 +            arg!(--slight_loss <NUM> "无损编码时允许轻微质量损失.")
-@@ -17,2 +17,2 @@ pub fn webp() -> Command {
+                 .value_parser(value_parser!(u8).range(0..=100))
+                 .default_value("0")
+                 .requires("lossless"),
 -            arg!(--discrete "Discrete tone image.").requires("lossless"),
 -            arg!(--exact "Preserve transparent data."),
 +            arg!(--discrete "离散色调图像.").requires("lossless"),
 +            arg!(--exact "保留透明数据."),
+         ])
+         .common_args()
+ }
 diff --git a/src/cli/common.rs b/src/cli/common.rs
 index 829717b..c55d107 100644
 --- a/src/cli/common.rs
@@ -411,53 +495,131 @@ diff --git a/src/cli/pipeline.rs b/src/cli/pipeline.rs
 index 6dc60f1..71dd913 100644
 --- a/src/cli/pipeline.rs
 +++ b/src/cli/pipeline.rs
-@@ -107 +107 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+@@ -104,7 +104,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+             let downscale = matches.get_flag("downscale") && !matches.get_flag("no-downscale");
+             let upscale = matches.get_flag("upscale") && !matches.get_flag("no-upscale");
+ 
 -            log::debug!("downscale: {downscale}, upscale: {upscale}");
 +            log::debug!("缩小: {downscale}, 放大: {upscale}");
-@@ -116 +116 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+ 
+             let size = img.dimensions();
+ 
+@@ -113,22 +113,22 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                 .zip(matches.indices_of("resize").unwrap())
+                 .for_each(|(value, idx)| {
+                     let (w, h) = value.map_dimensions(size.0, size.1);
 -                    log::trace!("setup resize {value} on index {idx}");
 +                    log::trace!("在索引 {idx} 处设置调整大小 {value}");
-@@ -121 +121 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+ 
+                     // Skip if the image is already the desired size
+                     // or if both downscale and upscale are disabled
+                     if (!downscale && !upscale) || (w == size.0 && h == size.1) {
 -                        log::trace!("skip resize to {w}x{h} on index {idx}");
 +                        log::trace!("跳过在索引 {idx} 处调整大小为 {w}x{h}");
-@@ -126 +126 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                         return;
+                     }
+ 
+                     if !downscale && (w <= size.0 || h <= size.1) {
 -                        log::trace!("downscaling disabled, skip resize to {w}x{h} on index {idx}");
 +                        log::trace!("禁用缩小, 跳过在索引 {idx} 处调整大小为 {w}x{h}");
-@@ -131 +131 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                         return;
+                     }
+ 
+                     if !upscale && (w >= size.0 || h >= size.1) {
 -                        log::trace!("upscaling disabled, skip resize to {w}x{h} on index {idx}");
 +                        log::trace!("禁用放大, 跳过在索引 {idx} 处调整大小为 {w}x{h}");
-@@ -161 +161 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                         return;
+                     }
+ 
+@@ -158,7 +158,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                 .into_iter()
+                 .zip(matches.indices_of("quantization").unwrap())
+                 .for_each(|(value, idx)| {
 -                    log::trace!("setup quantization {value} on index {idx}");
 +                    log::trace!("在索引 {idx} 处设置量化 {value}");
-@@ -177 +177 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+ 
+                     map.insert(
+                         idx,
+@@ -174,7 +174,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+             .zip(matches.indices_of("premultiply").unwrap())
+             .for_each(|(value, idx)| {
+                 if let Some(op) = map.get(&(idx + 2)) {
 -                    log::trace!("setup alpha premultiply for {}", op.name());
 +                    log::trace!("为 {} 设置 alpha 预乘", op.name());
-@@ -186 +186 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+ 
+                     map.insert(
+                         idx,
+@@ -183,7 +183,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+ 
+                     assert!(
+                         !map.contains_key(&(idx + 3)),
 -                        "There is a operation at {} aborting",
 +                        "在 {} 处存在操作, 正在中止",
-@@ -195 +195 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                         idx + 3
+                     );
+ 
+@@ -192,7 +192,7 @@ pub fn operations(matches: &ArgMatches, img: &Image) -> BTreeMap<usize, Box<dyn
+                         Box::new(PremultiplyAlpha::new(AlphaState::NonPreMultiplied)),
+                     );
+                 } else {
 -                    log::warn!("No operation found for premultiply at index {idx}")
 +                    log::warn!("在索引 {idx} 处未找到用于预乘的操作")
-@@ -308 +308 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                 }
+             })
+     }
+@@ -305,7 +305,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                     "grayscale" => mozjpeg::ColorSpace::JCS_GRAYSCALE,
+                     cs => {
+                         return Err(ImageErrors::GenericString(format!(
 -                            "Unsupported mozjpeg colorspace: {cs}",
 +                            "不支持 mozjpeg 色彩空间: {cs}",
-@@ -336 +336 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                         )));
+                     }
+                 },
+@@ -333,7 +333,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                         }
+                         q => {
+                             return Err(ImageErrors::GenericString(
 -                                format!("Unknown qtable: {q}",),
 +                                format!("未知的 qtable: {q}",),
-@@ -410 +410 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                             ));
+                         }
+                     }),
+@@ -407,7 +407,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                     "rgb" => ravif::ColorModel::RGB,
+                     cs => {
+                         return Err(ImageErrors::GenericString(format!(
 -                            "Unsupported avif colorspace: {cs}",
 +                            "不支持 avif 色彩空间: {cs}",
-@@ -424 +424 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                         )));
+                     }
+                 },
+@@ -421,7 +421,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                     "Premultiplied" => ravif::AlphaColorMode::Premultiplied,
+                     mode => {
+                         return Err(ImageErrors::GenericString(format!(
 -                            "Unsupported avif alpha mode: {mode}",
 +                            "不支持 avif alpha 模式: {mode}",
-@@ -455 +455 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+                         )));
+                     }
+                 },
+@@ -452,7 +452,7 @@ pub fn encoder(name: &str, matches: &ArgMatches) -> Result<AvailableEncoders, Im
+         "qoi" => Ok(AvailableEncoders::Qoi(Box::new(QoiEncoder::new()))),
+ 
+         name => Err(ImageErrors::GenericString(format!(
 -            "Encoder \"{name}\" not found",
 +            "编码器 \"{name}\" 未找到",
+         ))),
+     }
+ }
 diff --git a/src/cli/preprocessors/mod.rs b/src/cli/preprocessors/mod.rs
 index fdb891b..5128cff 100644
 --- a/src/cli/preprocessors/mod.rs
 +++ b/src/cli/preprocessors/mod.rs
-@@ -28,9 +28,9 @@ impl Preprocessors for Command {
+@@ -25,94 +25,88 @@ impl Preprocessors for Command {
+             .next_help_heading("Preprocessors")
+             .args([
+                 #[cfg(feature = "resize")]
 -                arg!(--resize <RESIZE> "Resize the image(s) according to the specified criteria.")
 -                    .long_help(indoc! {r#"Resize the image(s) according to the specified criteria.
 -
@@ -476,90 +638,124 @@ index fdb891b..5128cff 100644
 +                    - 100x100: 将图像尺寸调整为 宽度x高度
 +                    - 100w:    基于宽度保持纵横比来调整图像尺寸
 +                    - 100h:    基于高度保持纵横比来调整图像尺寸"#})
-@@ -41,2 +41,2 @@ impl Preprocessors for Command {
+                     .value_parser(value_parser!(ResizeValue))
+                     .action(ArgAction::Append),
+ 
+                 #[cfg(feature = "resize")]
 -                arg!(--downscale "Downscale the image(s) when resizing.")
 -                    .long_help(indoc! {r#"Downscale the image(s) when resizing.
 +                arg!(--downscale "调整大小时缩小图像.")
 +                    .long_help(indoc! {r#"调整大小时缩小图像.
-@@ -44,2 +44,2 @@ impl Preprocessors for Command {
+ 
 -                    This is useful when you want to reduce the size of the image when it is larger than the specified size.
 -                    It is recommended to use this option with --resize"#})
 +                    当您想在图像大于指定尺寸时减小其尺寸时, 此选项非常有用.
 +                    建议将此选项与 --resize 一起使用"#})
-@@ -51,2 +51,2 @@ impl Preprocessors for Command {
+                     .default_value("true")
+                     .action(ArgAction::SetTrue)
+                     .requires("resize")
+                     .overrides_with("no-downscale"),
+                 #[cfg(feature = "resize")]
 -                arg!(--"no-downscale" "Disable downscaling when resizing.")
 -                    .long_help(indoc! {r#"Disable downscaling when resizing.
 +                arg!(--"no-downscale" "在调整大小时禁用缩小.")
 +                    .long_help(indoc! {r#"在调整大小时禁用缩小.
-@@ -54,2 +54,2 @@ impl Preprocessors for Command {
+ 
 -                    This is useful when you don't want to reduce the size of the image when it is larger than the specified size.
 -                    It is recommended to use this option with --resize"#})
 +                    当您不想在图像大于指定尺寸时减小其尺寸时, 此选项非常有用.
 +                    建议将此选项与 --resize 一起使用"#})
-@@ -60,2 +60,2 @@ impl Preprocessors for Command {
+                     .action(ArgAction::SetTrue)
+                     .requires("resize"),
+ 
+                 #[cfg(feature = "resize")]
 -                arg!(--upscale "Upscale the image(s) when resizing.")
 -                    .long_help(indoc! {r#"Upscale the image(s) when resizing.
 +                arg!(--upscale "调整大小时放大图像.")
 +                    .long_help(indoc! {r#"调整大小时放大图像.
-@@ -63,2 +63,2 @@ impl Preprocessors for Command {
+ 
 -                    This is useful when you want to increase the size of the image when it is smaller than the specified size.
 -                    It is recommended to use this option with --resize"#})
 +                    当您想在图像小于指定尺寸时增加其尺寸时, 此选项非常有用.
 +                建议将此选项与 --resize 一起使用"#})
-@@ -70,2 +70,2 @@ impl Preprocessors for Command {
+                     .default_value("true")
+                     .action(ArgAction::SetTrue)
+                     .requires("resize")
+                     .overrides_with("no-upscale"),
+                 #[cfg(feature = "resize")]
 -                arg!(--"no-upscale" "Disable upscaling when resizing.")
 -                    .long_help(indoc! {r#"Disable upscaling when resizing.
 +                arg!(--"no-upscale" "在调整大小时禁用放大.")
 +                    .long_help(indoc! {r#"在调整大小时禁用放大.
-@@ -73,2 +73,2 @@ impl Preprocessors for Command {
+ 
 -                    This is useful when you don't want to increase the size of the image when it is smaller than the specified size.
 -                    It is recommended to use this option with --resize"#})
 +                    当您不想在图像小于指定尺寸时增加其尺寸时, 此选项非常有用.
 +                建议将此选项与 --resize 一起使用"#})
-@@ -79 +79 @@ impl Preprocessors for Command {
+                     .action(ArgAction::SetTrue)
+                     .requires("resize"),
+ 
+                 #[cfg(feature = "resize")]
 -                arg!(--filter <FILTER> "Filter that used when resizing an image.")
 +                arg!(--filter <FILTER> "调整图像大小时使用的滤镜.")
-@@ -85,2 +85,2 @@ impl Preprocessors for Command {
+                     .value_parser(value_parser!(ResizeFilter))
+                     .default_value("lanczos3")
+                     .requires("resize"),
+ 
+                 #[cfg(feature = "quantization")]
 -                arg!(--quantization [QUALITY] "Reduces the color palette to the given quality percentage.")
 -                    .long_help(indoc! {r#"Reduces the color palette to the given quality percentage.
 +                arg!(--quantization [QUALITY] "将调色板减少到给定的质量百分比.")
 +                    .long_help(indoc! {r#""将调色板减少到给定的质量百分比.
-@@ -88,3 +88 @@ impl Preprocessors for Command {
+ 
 -                    This is a preprocessing step that limits how many distinct
 -                    colors the image can use, not a replacement for -q/--quality
 -                    (which controls encoder compression).
 +                    这是一个预处理步骤, 它限制了图像可以使用的不同颜色的数量, 而不是 -q/--quality 的替代品 (后者控制编码器压缩).
-@@ -92,3 +90 @@ impl Preprocessors for Command {
+ 
 -                    Lower values produce fewer colors, which can introduce
 -                    banding artifacts. For best file-size reduction, combine
 -                    with a lower -q value, e.g. -q 50 --quantization 80.
 +                较低的值会产生较少的颜色, 这可能会引入色带伪影. 为获得最佳的文件大小缩减效果, 请结合较低的 -q 值使用, 例如 -q 50 --quantization 80.
-@@ -96 +92 @@ impl Preprocessors for Command {
+ 
 -                    If quality is not provided, default 75 is used."#})
 +                如果未提供质量, 则使用默认值 75."#})
-@@ -102,2 +98,2 @@ impl Preprocessors for Command {
+                     .value_parser(value_parser!(u8).range(1..=100))
+                     .action(ArgAction::Append)
+                     .default_missing_value("75"),
+ 
+                 #[cfg(feature = "quantization")]
 -                arg!(--dithering [QUALITY] "Smooths banding artifacts introduced by quantization.")
 -                    .long_help(indoc! {r#"Smooths banding artifacts introduced by quantization.
 +                arg!(--dithering [QUALITY] "平滑由量化引入的色带伪影.")
 +                    .long_help(indoc! {r#"平滑由量化引入的色带伪影.
-@@ -105,3 +101 @@ impl Preprocessors for Command {
+ 
 -                    Higher values spread quantization error more evenly,
 -                    reducing visible banding at the cost of slightly
 -                    larger file sizes.
 +                    较高的值会更均匀地分布量化误差, 减少可见的色带, 代价是文件大小略有增加.
-@@ -109,2 +103,2 @@ impl Preprocessors for Command {
+ 
 -                    Used with --quantization flag.
 -                    If quality is not provided, default 75 is used."#})
 +                与 --quantization 标志一起使用.
 +                如果未提供质量, 则使用默认值 75."#})
-@@ -115 +109 @@ impl Preprocessors for Command {
+                     .value_parser(value_parser!(u8).range(1..=100))
+                     .default_missing_value("75")
+                     .requires("quantization"),
+ 
 -                position_sensitive_flag(arg!(--premultiply "Premultiply alpha before operation"))
 +                position_sensitive_flag(arg!(--premultiply "操作前预乘 alpha"))
+                     .action(ArgAction::Append)
+             ])
+     }
 diff --git a/src/cli/preprocessors/resize/filter.rs b/src/cli/preprocessors/resize/filter.rs
 index de62acb..6bb0d9e 100644
 --- a/src/cli/preprocessors/resize/filter.rs
 +++ b/src/cli/preprocessors/resize/filter.rs
-@@ -31,7 +31,7 @@ impl ValueEnum for ResizeFilter {
+@@ -28,13 +28,13 @@ impl ValueEnum for ResizeFilter {
+ 
+     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+         Some(match self {
 -            ResizeFilter::Nearest => PossibleValue::new("nearest").help("Simplest filter, for each destination pixel gets nearest source pixel."),
 -            ResizeFilter::Box => PossibleValue::new("box").help("Each pixel contributes equally to destination. For upscaling, like Nearest."),
 -            ResizeFilter::Bilinear => PossibleValue::new("bilinear").help("Uses linear interpolation among contributing pixels for output."),
@@ -574,119 +770,269 @@ index de62acb..6bb0d9e 100644
 +            ResizeFilter::CatmullRom => PossibleValue::new("catmull-rom").help("使用三次插值进行输出像素计算."),
 +            ResizeFilter::Mitchell => PossibleValue::new("mitchell").help("利用三次插值进行输出像素计算."),
 +            ResizeFilter::Lanczos3 => PossibleValue::new("lanczos3").help("用高质量 Lanczos 滤镜进行输出像素计算."),
-@@ -45 +45 @@ impl std::fmt::Display for ResizeFilter {
+         })
+     }
+ }
+@@ -42,7 +42,7 @@ impl ValueEnum for ResizeFilter {
+ impl std::fmt::Display for ResizeFilter {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         self.to_possible_value()
 -            .expect("no values are skipped")
 +            .expect("不跳过任何值")
-@@ -60 +60 @@ impl std::str::FromStr for ResizeFilter {
+             .get_name()
+             .fmt(f)
+     }
+@@ -57,7 +57,7 @@ impl std::str::FromStr for ResizeFilter {
+                 return Ok(*variant);
+             }
+         }
 -        Err(anyhow!("invalid variant: {s}"))
 +        Err(anyhow!("无效变体: {s}"))
+     }
+ }
+ 
 diff --git a/src/cli/preprocessors/resize/value.rs b/src/cli/preprocessors/resize/value.rs
 index 8501fc6..a197333 100644
 --- a/src/cli/preprocessors/resize/value.rs
 +++ b/src/cli/preprocessors/resize/value.rs
-@@ -73 +73 @@ impl std::str::FromStr for ResizeValue {
+@@ -70,17 +70,17 @@ impl std::str::FromStr for ResizeValue {
+         match s {
+             s if s.starts_with('@') => Ok(Self::Multiplier(s[1..].parse()?)),
+             s if s.ends_with('%') => Ok(Self::Percentage(s[..s.len() - 1].parse()?)),
 -            s if s.contains('w') && s.contains('h') => Err(anyhow!("Invalid resize value")),
 +            s if s.contains('w') && s.contains('h') => Err(anyhow!("无效的调整大小值")),
-@@ -76 +76 @@ impl std::str::FromStr for ResizeValue {
+             s if s.contains('w') => {
+                 let Some(cap) = WIDTH_RE.captures(&s) else {
 -                    return Err(anyhow!("Invalid resize value"));
 +                    return Err(anyhow!("无效的调整大小值"));
-@@ -83 +83 @@ impl std::str::FromStr for ResizeValue {
+                 };
+ 
+                 Ok(Self::Dimensions(Some(cap["width"].parse()?), None))
+             }
+             s if s.contains('h') => {
+                 let Some(cap) = HEIGHT_RE.captures(&s) else {
 -                    return Err(anyhow!("Invalid resize value"));
 +                    return Err(anyhow!("无效的调整大小值"));
-@@ -91 +91 @@ impl std::str::FromStr for ResizeValue {
+                 };
+ 
+                 Ok(Self::Dimensions(None, Some(cap["height"].parse()?)))
+@@ -88,7 +88,7 @@ impl std::str::FromStr for ResizeValue {
+             s if s.contains('x') => {
+                 let dimensions: Vec<&str> = s.split('x').collect();
+                 if dimensions.len() > 2 {
 -                    return Err(anyhow!("There is more that 2 dimensions"));
 +                    return Err(anyhow!("维度不止两个"));
-@@ -100 +100 @@ impl std::str::FromStr for ResizeValue {
+                 }
+ 
+                 let width = Some(dimensions[0].parse::<usize>()?);
+@@ -97,7 +97,7 @@ impl std::str::FromStr for ResizeValue {
+ 
+                 Ok(Self::Dimensions(width, height))
+             }
 -            _ => Err(anyhow!("Invalid resize value")),
 +            _ => Err(anyhow!("无效的调整大小值")),
+         }
+     }
+ }
 diff --git a/src/cli/utils/paths/mod.rs b/src/cli/utils/paths/mod.rs
 index aeaa04c..c0f098e 100644
 --- a/src/cli/utils/paths/mod.rs
 +++ b/src/cli/utils/paths/mod.rs
-@@ -19 +19 @@ pub fn get_paths(
+@@ -16,14 +16,14 @@ pub fn get_paths(
+         .into_iter()
+         .filter_map(move |path| -> Option<(PathBuf, PathBuf)> {
+             if !path.is_file() {
 -                log::warn!("{path:?} is not a file");
 +                log::warn!("{path:?} 不是一个文件");
-@@ -26 +26 @@ pub fn get_paths(
+                 return None;
+             }
+ 
+             let file_name = path
+                 .file_stem()
+                 .and_then(|f| f.to_str())
 -                .unwrap_or("optimized_image");
 +                .unwrap_or("已优化图像");
+ 
+             let mut out_path = match &out_dir {
+                 Some(dir) => {
 diff --git a/src/codecs/avif/encoder/mod.rs b/src/codecs/avif/encoder/mod.rs
 index d18e373..acd6b51 100644
 --- a/src/codecs/avif/encoder/mod.rs
 +++ b/src/codecs/avif/encoder/mod.rs
-@@ -77 +77 @@ impl EncoderTrait for AvifEncoder {
+@@ -74,7 +74,7 @@ impl EncoderTrait for AvifEncoder {
+         let (width, height) = image.dimensions();
+         if image.is_animated() {
+             log::warn!(
 -                "AVIF encoder does not support animated images, only the first frame will be encoded"
 +                "AVIF 编码器不支持动画图像, 仅编码第一帧"
+             );
+         }
+         let data = &image.flatten_to_u8()[0];
 diff --git a/src/codecs/mozjpeg/encoder/mod.rs b/src/codecs/mozjpeg/encoder/mod.rs
 index 290c14c..c8248ce 100644
 --- a/src/codecs/mozjpeg/encoder/mod.rs
 +++ b/src/codecs/mozjpeg/encoder/mod.rs
-@@ -107 +107 @@ impl EncoderTrait for MozJpegEncoder {
+@@ -104,7 +104,7 @@ impl EncoderTrait for MozJpegEncoder {
+         let (width, height) = image.dimensions();
+         if image.is_animated() {
+             log::warn!(
 -                "MozJpeg does not support animated images, only the first frame will be encoded"
 +                "MozJpeg 不支持动画图像, 仅编码第一帧"
-@@ -145 +145 @@ impl EncoderTrait for MozJpegEncoder {
+             );
+         }
+         let data = &image.flatten_to_u8()[0];
+@@ -142,7 +142,7 @@ impl EncoderTrait for MozJpegEncoder {
+                 let applied = self.options.smoothing.max(min_smoothing);
+                 if applied != self.options.smoothing {
+                     log::debug!(
 -                        "Smoothing raised from {} to {applied} to prevent DCT overflow at quality {}",
 +                        "平滑度已从 {} 提高至 {applied}, 以防止质量为 {} 时发生 DCT 溢出",
-@@ -165 +165 @@ impl EncoderTrait for MozJpegEncoder {
+                         self.options.smoothing,
+                         self.options.quality,
+                     );
+@@ -162,17 +162,17 @@ impl EncoderTrait for MozJpegEncoder {
+             comp.set_smoothing_factor(safe_smoothing);
+             comp.set_color_space(match format {
+                 mozjpeg::ColorSpace::JCS_GRAYSCALE => {
 -                    log::warn!("Input colorspace is GRAYSCALE, using GRAYSCALE as output");
 +                    log::warn!("输入色彩空间为 GRAYSCALE, 使用 GRAYSCALE 作为输出");
-@@ -170 +170 @@ impl EncoderTrait for MozJpegEncoder {
+ 
+                     mozjpeg::ColorSpace::JCS_GRAYSCALE
+                 }
+                 mozjpeg::ColorSpace::JCS_CMYK => {
 -                    log::warn!("Input colorspace is CMYK, using CMYK as output");
 +                    log::warn!("输入色彩空间为 CMYK, 使用 CMYK 作为输出");
-@@ -175 +175 @@ impl EncoderTrait for MozJpegEncoder {
+ 
+                     mozjpeg::ColorSpace::JCS_CMYK
+                 }
+                 mozjpeg::ColorSpace::JCS_YCCK => {
 -                    log::warn!("Input colorspace is YCCK, using YCCK as output");
 +                    log::warn!("输入色彩空间为 YCCK, 使用 YCCK 作为输出");
-@@ -223 +223 @@ impl EncoderTrait for MozJpegEncoder {
+ 
+                     mozjpeg::ColorSpace::JCS_YCCK
+                 }
+@@ -220,7 +220,7 @@ impl EncoderTrait for MozJpegEncoder {
+                 )))
+             } else {
+                 ImageErrors::EncodeErrors(zune_image::errors::ImgEncodeErrors::GenericStatic(
 -                    "Unknown error occurred during encoding",
 +                    "编码期间发生未知错误",
+                 ))
+             }
+         })?
 diff --git a/src/codecs/oxipng/encoder/mod.rs b/src/codecs/oxipng/encoder/mod.rs
 index 06271f4..4ecacf7 100644
 --- a/src/codecs/oxipng/encoder/mod.rs
 +++ b/src/codecs/oxipng/encoder/mod.rs
-@@ -47 +47 @@ impl EncoderTrait for OxiPngEncoder {
+@@ -44,7 +44,7 @@ impl EncoderTrait for OxiPngEncoder {
+ 
+         if image.is_animated() {
+             log::warn!(
 -                "OxiPNG does not support animated images, only the first frame will be encoded"
 +                "OxiPNG 不支持动画图像, 仅编码第一帧"
-@@ -63 +63 @@ impl EncoderTrait for OxiPngEncoder {
+             );
+         }
+ 
+@@ -60,7 +60,7 @@ impl EncoderTrait for OxiPngEncoder {
+                 .collect()
+         } else {
+             return Err(ImageErrors::EncodeErrors(ImgEncodeErrors::Generic(
 -                format!("{:?} is not supported for oxipng encoding", image.depth()),
 +                format!("{:?} 不支持 oxipng 编码", image.depth()),
-@@ -96 +96 @@ impl EncoderTrait for OxiPngEncoder {
+             )));
+         }
+         .into_iter()
+@@ -93,7 +93,7 @@ impl EncoderTrait for OxiPngEncoder {
+                 BitDepth::Sixteen => oxipng::BitDepth::Sixteen,
+                 d => {
+                     return Err(ImageErrors::EncodeErrors(ImgEncodeErrors::Generic(
 -                        format!("{d:?} is not supported"),
 +                        format!("{d:?} 不支持"),
+                     )));
+                 }
+             },
 diff --git a/src/codecs/tiff/decoder/mod.rs b/src/codecs/tiff/decoder/mod.rs
 index 356b1b8..a2f8f4d 100644
 --- a/src/codecs/tiff/decoder/mod.rs
 +++ b/src/codecs/tiff/decoder/mod.rs
-@@ -17 +17 @@ impl<R: Read + Seek> TiffDecoder<R> {
+@@ -14,7 +14,7 @@ impl<R: Read + Seek> TiffDecoder<R> {
+     /// Create a new tiff decoder that reads data from `source`
+     pub fn try_new(source: R) -> Result<Self, ImageErrors> {
+         let inner = tiff::decoder::Decoder::new(source).map_err(|e| {
 -            ImageErrors::ImageDecodeErrors(format!("Unable to create TIFF decoder: {e}"))
 +            ImageErrors::ImageDecodeErrors(format!("无法创建 TIFF 解码器: {e}"))
-@@ -34 +34 @@ where
+         })?;
+ 
+         Ok(Self {
+@@ -31,7 +31,7 @@ where
+ {
+     fn decode(&mut self) -> Result<Image, ImageErrors> {
+         let (width, height) = self.inner.dimensions().map_err(|e| {
 -            ImageErrors::ImageDecodeErrors(format!("Unable to read dimensions - {e}"))
 +            ImageErrors::ImageDecodeErrors(format!("无法读取尺寸 - {e}"))
-@@ -53 +53 @@ where
+         })?;
+ 
+         let (width, height) = (width as usize, height as usize);
+@@ -50,13 +50,13 @@ where
+                 _ => ColorSpace::Unknown,
+             })
+             .map_err(|e| {
 -                ImageErrors::ImageDecodeErrors(format!("Unable to read colorspace - {e}"))
 +                ImageErrors::ImageDecodeErrors(format!("无法读取色彩空间 - {e}"))
-@@ -59 +59 @@ where
+             })?;
+ 
+         self.colorspace = colorspace;
+ 
+         let result = self.inner.read_image().map_err(|e| {
 -            ImageErrors::ImageDecodeErrors(format!("Unable to decode TIFF file - {e}"))
 +            ImageErrors::ImageDecodeErrors(format!("无法解密 TIFF 文件 - {e}"))
-@@ -73 +73 @@ where
+         })?;
+ 
+         match result {
+@@ -70,7 +70,7 @@ where
+                 Ok(Image::from_f32(&data, width, height, colorspace))
+             }
+             _ => Err(ImageErrors::ImageDecodeErrors(
 -                "Tiff Data format not supported".to_string(),
 +                "不支持 Tiff 数据格式".to_string(),
+             )),
+         }
+     }
 diff --git a/src/codecs/webp/decoder/mod.rs b/src/codecs/webp/decoder/mod.rs
 index 409add1..aede6d7 100644
 --- a/src/codecs/webp/decoder/mod.rs
 +++ b/src/codecs/webp/decoder/mod.rs
-@@ -35 +35 @@ where
+@@ -32,7 +32,7 @@ where
+ {
+     fn decode(&mut self) -> Result<Image, ImageErrors> {
+         let (width, height) = self.dimensions().ok_or_else(|| {
 -            ImageErrors::ImageDecodeErrors("WebP image has no frames".to_string())
 +            ImageErrors::ImageDecodeErrors("WebP 图像没有帧".to_string())
-@@ -50 +50 @@ where
+         })?;
+         let color = self.out_colorspace();
+ 
+@@ -47,7 +47,7 @@ where
+ 
+         if frames.is_empty() {
+             return Err(ImageErrors::ImageDecodeErrors(
 -                "WebP image contains no frames".to_string(),
 +                "WebP 图像不包含任何帧".to_string(),
+             ));
+         }
+ 
 diff --git a/src/codecs/webp/encoder/mod.rs b/src/codecs/webp/encoder/mod.rs
 index 53aa378..83ead6f 100644
 --- a/src/codecs/webp/encoder/mod.rs
 +++ b/src/codecs/webp/encoder/mod.rs
-@@ -107 +107 @@ impl EncoderTrait for WebPEncoder {
+@@ -104,7 +104,7 @@ impl EncoderTrait for WebPEncoder {
+             };
+ 
+             let res = encoder.encode_advanced(&self.options).map_err(|e| {
 -                ImgEncodeErrors::ImageEncodeErrors(format!("webp encoding failed: {e:?}"))
 +                ImgEncodeErrors::ImageEncodeErrors(format!("webp 编码失败: {e:?}"))
+             })?;
+ 
+             writer.write(&res).map_err(|e| {
 diff --git a/src/main.rs b/src/main.rs
 index 55e85af..05f0fef 100644
 --- a/src/main.rs
@@ -2178,28 +2524,67 @@ diff --git a/src/operations/icc/mod.rs b/src/operations/icc/mod.rs
 index 07802a0..7ec5c9d 100644
 --- a/src/operations/icc/mod.rs
 +++ b/src/operations/icc/mod.rs
-@@ -31 +31 @@ impl OperationsTrait for ApplyICC {
+@@ -28,7 +28,7 @@ impl ApplyICC {
+ 
+ impl OperationsTrait for ApplyICC {
+     fn name(&self) -> &'static str {
 -        "apply icc profile"
 +        "应用 ICC 配置文件"
-@@ -67 +67 @@ impl OperationsTrait for ApplyICC {
+     }
+ 
+     fn execute_impl(&self, image: &mut Image) -> Result<(), ImageErrors> {
+@@ -64,7 +64,7 @@ impl OperationsTrait for ApplyICC {
+             (cs, depth) => {
+                 return Err(ImageErrors::OperationsError(
+                     ImageOperationsErrors::GenericString(format!(
 -                        "ICC profile application not supported for {cs:?} at {depth}-bit",
 +                        "在 {depth}-bit 下不支持对 {cs:?} 应用 ICC 配置文件",
-@@ -76 +76 @@ impl OperationsTrait for ApplyICC {
+                     )),
+                 ));
+             }
+@@ -73,7 +73,7 @@ impl OperationsTrait for ApplyICC {
+         let profile = self
+             .profile
+             .lock()
 -            .map_err(|_| ImageOperationsErrors::GenericString("Mutex poisoned".to_string()))?;
 +            .map_err(|_| ImageOperationsErrors::GenericString("互斥锁已中毒".to_string()))?;
-@@ -128 +128 @@ impl OperationsTrait for ApplySRGB {
+ 
+         let t = Transform::new_flags(
+             &src_profile,
+@@ -125,12 +125,12 @@ pub struct ApplySRGB;
+ 
+ impl OperationsTrait for ApplySRGB {
+     fn name(&self) -> &'static str {
 -        "apply srgb profile"
 +        "应用 srgb 配置文件"
-@@ -133 +133 @@ impl OperationsTrait for ApplySRGB {
+     }
+ 
+     fn execute_impl(&self, image: &mut Image) -> Result<(), ImageErrors> {
+         if image.metadata().icc_chunk().is_none() {
 -            log::warn!("No icc profile in the image, skipping");
 +            log::warn!("图像中没有 icc 配置文件, 正在跳过");
+             return Ok(());
+         }
+ 
 diff --git a/src/operations/resize/mod.rs b/src/operations/resize/mod.rs
 index d5448e1..0216439 100644
 --- a/src/operations/resize/mod.rs
 +++ b/src/operations/resize/mod.rs
-@@ -36 +36 @@ impl OperationsTrait for Resize {
+@@ -33,7 +33,7 @@ impl Resize {
+ 
+ impl OperationsTrait for Resize {
+     fn name(&self) -> &'static str {
 -        "fast resize"
 +        "快速调整大小"
-@@ -44 +44 @@ impl OperationsTrait for Resize {
+     }
+ 
+     fn execute_impl(&self, image: &mut Image) -> Result<(), ImageErrors> {
+@@ -41,7 +41,7 @@ impl OperationsTrait for Resize {
+         let (dst_width, dst_height) = self.new_dimensions;
+         if (dst_height == 0) || (dst_width == 0) {
+             return Err(ImageErrors::OperationsError(
 -                ImageOperationsErrors::Generic("Width or Height cannot be 0"),
 +                ImageOperationsErrors::Generic("宽度或高度不能为0"),
+             ));
+         }
+ 
