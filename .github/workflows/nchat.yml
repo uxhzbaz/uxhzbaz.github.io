@@ -1,0 +1,57 @@
+name: Build nchat v5.15.26
+
+on:
+  workflow_dispatch: # 支持手动点击触发构建
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04 # 使用最新的稳定版 Ubuntu 环境
+
+    steps:
+      - name: Install System and Extra Dependencies
+        run: |
+          sudo apt-get update
+          # 安装官方基础依赖 + Clang 编译器 + 扩展剪贴板与图片支持依赖
+          sudo apt-get install -y ccache cmake build-essential gperf help2man \
+            libreadline-dev libssl-dev libncurses-dev libncursesw5-dev \
+            ncurses-doc zlib1g-dev libsqlite3-dev libmagic-dev golang clang \
+            wl-clipboard libpng-dev libxcb1-dev libx11-dev
+
+      - name: Setup Compiler Cache (ccache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: nchat-ccache-${{ github.sha }}
+          restore-keys: |
+            nchat-ccache-
+
+      - name: Download and Extract nchat Source
+        run: |
+          curl -fsSL https://github.com/d99kris/nchat/archive/refs/tags/v5.15.26.tar.gz -o nchat.tar.gz
+          tar -xzf nchat.tar.gz
+
+      - name: Configure and Build via Clang
+        run: |
+          cd nchat-5.15.26
+          mkdir build && cd build
+          
+          # 关键优化：指定使用 Clang/Clang++（每线程仅需 ~1.5GB 内存，彻底防止 7GB 容器爆内存）
+          export CC=clang
+          export CXX=clang++
+          export CCACHE_DIR=$HOME/.cache/ccache
+          
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          make -j$(nproc)
+
+      - name: Package Binary Artifact
+        run: |
+          cd nchat-5.15.26/build
+          # 虚拟安装到当前 dist 目录下以便打包
+          make install DESTDIR=$(pwd)/dist
+          tar -czf ../../nchat-v5.15.26-linux-x86_64.tar.gz -C dist .
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nchat-v5.15.26-binary
+          path: nchat-v5.15.26-linux-x86_64.tar.gz
