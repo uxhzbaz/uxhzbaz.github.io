@@ -11,11 +11,16 @@ jobs:
       - name: Install System and Extra Dependencies
         run: |
           sudo apt-get update
-          # 安装官方基础依赖 + Clang 编译器 + 扩展剪贴板与图片支持依赖
+          # 注意：已从下文移除了系统自带的旧版 golang
           sudo apt-get install -y ccache cmake build-essential gperf help2man \
             libreadline-dev libssl-dev libncurses-dev libncursesw5-dev \
-            ncurses-doc zlib1g-dev libsqlite3-dev libmagic-dev golang clang \
+            ncurses-doc zlib1g-dev libsqlite3-dev libmagic-dev clang \
             wl-clipboard libpng-dev libxcb1-dev libx11-dev
+
+      - name: Setup Go (>= 1.23)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x' # 动态安装满足要求的 1.23 最新微版本
 
       - name: Setup Compiler Cache (ccache)
         uses: actions/cache@v4
@@ -35,7 +40,7 @@ jobs:
           cd nchat-5.15.26
           mkdir build && cd build
           
-          # 关键优化：指定使用 Clang/Clang++（每线程仅需 ~1.5GB 内存，彻底防止 7GB 容器爆内存）
+          # 指定使用 Clang/Clang++（每线程仅需 ~1.5GB 内存，防止 7GB 容器爆内存）
           export CC=clang
           export CXX=clang++
           export CCACHE_DIR=$HOME/.cache/ccache
