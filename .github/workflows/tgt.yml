@@ -60,9 +60,9 @@ jobs:
 
       - name: 安装 Zig ${{ env.ZIG_VERSION }}
         run: |
-          curl -sL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+          curl -sL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
             | tar -xJ -C "$HOME"
-          echo "$HOME/zig-linux-x86_64-${ZIG_VERSION}" >> $GITHUB_PATH
+          echo "$HOME/zig-x86_64-linux-${ZIG_VERSION}" >> $GITHUB_PATH
 
       - name: 缓存 cargo-zigbuild
         id: cache-zigbuild
