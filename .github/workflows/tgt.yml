@@ -19,12 +19,6 @@ on:
         default: 'true'
         required: false
 
-env:
-  PKG: tgt
-  VERSION: v1.0.0-rc1
-  URL: https://github.com/FedericoBruzzone/tgt/archive/refs/tags/v1.0.0-rc1.tar.gz
-  ZIG_VERSION: 0.16.0
-
 jobs:
   s:
     name: 解析参数
@@ -47,11 +41,16 @@ jobs:
 
   b:
     needs: s
-    name: ${{ env.PKG }}-${{ env.VERSION }}-${{ matrix.t }}
+    name: tgt-v1.0.0-rc1-${{ matrix.t }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
+    env:
+      PKG: tgt
+      VERSION: v1.0.0-rc1
+      URL: https://github.com/FedericoBruzzone/tgt/archive/refs/tags/v1.0.0-rc1.tar.gz
+      ZIG_VERSION: 0.16.0
     steps:
       - name: 安装系统依赖
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -106,12 +105,9 @@ jobs:
             || echo "::warning::UPX 压缩失败（已跳过）"
 
       - name: 生成摘要并打包
-        shell: bash
-        env:
-          TARGET: ${{ matrix.t }}
-          AB: ${{ env.PKG }}-${{ env.VERSION }}-${{ matrix.t }}
         run: |
-          BIN="target/${TARGET}/release/${PKG}"
+          AB="${PKG}-${VERSION}-${{ matrix.t }}"
+          BIN="target/${{ matrix.t }}/release/${PKG}"
           B_S256=$(sha256sum "$BIN" | awk '{print $1}')
           B_S512=$(sha512sum "$BIN" | awk '{print $1}')
           B_SIZE=$(ls -lh "$BIN" | awk '{print $5}')
@@ -128,5 +124,5 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PKG }}-${{ env.VERSION }}-${{ matrix.t }}
-          path: ./${{ env.PKG }}-${{ env.VERSION }}-${{ matrix.t }}
+          name: tgt-v1.0.0-rc1-${{ matrix.t }}
+          path: ./tgt-v1.0.0-rc1-${{ matrix.t }}
