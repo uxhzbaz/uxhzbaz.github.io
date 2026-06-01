@@ -55,7 +55,7 @@ jobs:
       - name: 安装系统依赖
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: upx-ucl libasound2-dev
+          packages: upx-ucl libasound2-dev libc++-dev libc++abi-dev
           version: 1.0
 
       - name: 安装 Zig ${{ env.ZIG_VERSION }}
