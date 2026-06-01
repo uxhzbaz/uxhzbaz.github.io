@@ -62,7 +62,9 @@ jobs:
                 *)         o="ubuntu-latest"  ;;
               esac
               c=""
-              [[ "$t" == *riscv* ]] && c="--no-default-features"
+              if [[ "$t" == *riscv* ]] || [[ "$t" == *musl* ]]; then
+                c="--no-default-features"
+              fi
 
               include=$(jq \
                 --arg u "$u" --arg r "$r" --arg b "$b" \
