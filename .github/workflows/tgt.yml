@@ -55,7 +55,7 @@ jobs:
       - name: 安装系统依赖
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: upx-ucl libasound2-dev libc++-dev libc++abi-dev
+          packages: upx-ucl
           version: 1.0
 
       - name: 安装 Zig ${{ env.ZIG_VERSION }}
@@ -89,8 +89,10 @@ jobs:
 
       - name: 编译
         run: |
-          # 获取用户输入的附加参数
-          ARGS="${{ github.event.inputs.extra_args }}"
+          cargo zigbuild --release --locked \
+            --target ${{ matrix.t }} \
+            --no-default-features \
+            ${{ github.event.inputs.extra_args }}
           
           # 如果目标三元组包含 musl，且用户没有手动输入参数，
           # 则自动剔除带 alsa/audiopus 依赖的音频特性，只保留核心静态打包特性
