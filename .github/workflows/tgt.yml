@@ -1,147 +1,38 @@
-name: Build tgt
-run-name: ${{ github.event.inputs.run_name || github.actor }}
+name: tgt
 on:
   workflow_dispatch:
     inputs:
-      run_name:
-        description: '工作流运行名称'
-        default: ''
-        required: false
-      t:
-        description: '目标三元组，逗号分隔'
-        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabihf'
       extra_args:
-        description: '附加 cargo 参数（如 --no-default-features）'
+        required: false
         default: ''
-        required: false
-      upx:
-        description: 'UPX 压缩 (true/false)'
-        default: 'true'
-        required: false
-
 jobs:
-  s:
-    name: 解析参数
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.p.outputs.matrix }}
-    steps:
-      - id: p
-        shell: bash
-        env:
-          T: ${{ github.event.inputs.t }}
-        run: |
-          include='[]'
-          IFS=',' read -ra TARGETS <<< "$T"
-          for t in "${TARGETS[@]}"; do
-            t="${t# }"; t="${t% }"
-            include=$(jq --arg t "$t" '. += [{"t":$t}]' <<< "$include")
-          done
-          echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
-
-  b:
-    needs: s
-    name: tgt-v1.0.0-rc1-${{ matrix.t }}
+  build:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
-    env:
-      PKG: tgt
-      VERSION: v1.0.0-rc1
-      URL: https://github.com/FedericoBruzzone/tgt/archive/refs/tags/v1.0.0-rc1.tar.gz
-      ZIG_VERSION: 0.16.0
+      matrix:
+        t: [aarch64-linux-android]
     steps:
-      - name: 安装系统依赖
-        uses: awalsh128/cache-apt-pkgs-action@latest
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          packages: upx-ucl
-          version: 1.0
-
-      - name: 安装 Zig ${{ env.ZIG_VERSION }}
-        run: |
-          curl -sL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
-            | tar -xJ -C "$HOME"
-          echo "$HOME/zig-x86_64-linux-${ZIG_VERSION}" >> $GITHUB_PATH
-
-      - name: 缓存 cargo-zigbuild
-        id: cache-zigbuild
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-zigbuild
-          key: cargo-zigbuild-${{ runner.os }}
-
-      - name: 安装 cargo-zigbuild
-        if: steps.cache-zigbuild.outputs.cache-hit != 'true'
-        run: cargo install cargo-zigbuild --locked
-
-      - name: 添加 Rust 目标
-        run: rustup target add ${{ matrix.t }}
-
-      - name: 下载并解压源码
-        run: |
-          curl -sL "$URL" | tar -xz --strip-components=1
-          grep -q '^strip *=' Cargo.toml \
-            && perl -pi -e 's/^strip *=.*/strip = true/' Cargo.toml \
-            || (grep -q '^\[profile\.release\]' Cargo.toml \
-              && perl -pi -e 's/^\[profile\.release\].*/$&\nstrip = true/' Cargo.toml \
-              || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
-
-      - name: 编译
+          targets: ${{ matrix.t }}
+      - name: Install NDK tool
+        run: cargo install cargo-ndk
+      - name: Compile
         env:
           ALSA_NO_PKG_CONFIG: '1'
           ALSA_STATIC: '1'
-          BINDGEN_EXTRA_CLANG_ARGS: '--sysroot=/usr'
         run: |
-          BASE_TARGET="${{ matrix.t }}"
-          
-          # 2. 获取用户输入的附加参数
           ARGS="${{ github.event.inputs.extra_args }}"
-          
-          if [[ "$BASE_TARGET" == *musl* && -z "$ARGS" ]]; then
+          if [[ "${{ matrix.t }}" == *musl* && -z "$ARGS" ]]; then
             ARGS="--no-default-features --features static-download"
           fi
-          
-          if [[ "$BASE_TARGET" == *"android"* ]]; then
-            export RUSTFLAGS="$RUSTFLAGS -C link-arg=-target -C link-arg=${BASE_TARGET}24"
+          if [[ "${{ matrix.t }}" == *"android"* ]]; then
+            cargo ndk --target ${{ matrix.t }} --android-platform 24 build --release --locked $ARGS
+          else
+            cargo build --target ${{ matrix.t }} --release --locked $ARGS
           fi
-          
-          echo "----------------------------------------"
-          echo "基础目标架构: $BASE_TARGET"
-          echo "Cargo 附加参数: $ARGS"
-          echo "最终启用的 RUSTFLAGS: $RUSTFLAGS"
-          echo "----------------------------------------"
-          
-          cargo zigbuild --release --locked \
-            --target "$BASE_TARGET" \
-            $ARGS
-
-      - name: UPX 压缩
-        if: ${{ github.event.inputs.upx != 'false' }}
-        run: |
-          upx --best --lzma "target/${{ matrix.t }}/release/${PKG}" \
-            && echo "UPX 压缩成功" \
-            || echo "::warning::UPX 压缩失败（已跳过）"
-
-      - name: 生成摘要并打包
-        run: |
-          AB="${PKG}-${VERSION}-${{ matrix.t }}"
-          BIN="target/${{ matrix.t }}/release/${PKG}"
-          B_S256=$(sha256sum "$BIN" | awk '{print $1}')
-          B_S512=$(sha512sum "$BIN" | awk '{print $1}')
-          B_SIZE=$(ls -lh "$BIN" | awk '{print $5}')
-          cp "$BIN" "./${AB}"
-          {
-            echo "## \`${AB}\`"
-            echo ""
-            echo "### 🔧 二进制校验"
-            echo "| 文件 | 大小 | SHA256 | SHA512 |"
-            echo "|---|---|---|---|"
-            echo "| \`${PKG}\` | ${B_SIZE} | \`${B_S256}\` | \`${B_S512}\` |"
-          } >> $GITHUB_STEP_SUMMARY
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: tgt-v1.0.0-rc1-${{ matrix.t }}
-          path: ./tgt-v1.0.0-rc1-${{ matrix.t }}
+          name: tgt-${{ matrix.t }}
+          path: target/${{ matrix.t }}/release/tgt
