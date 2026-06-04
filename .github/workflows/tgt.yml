@@ -94,28 +94,26 @@ jobs:
           BINDGEN_EXTRA_CLANG_ARGS: '--sysroot=/usr'
         run: |
           BASE_TARGET="${{ matrix.t }}"
-          ZIG_TARGET="$BASE_TARGET"
           
-          # 注意：必须是 android24 格式，绝对不能加点号 '.'
-          if [[ "$BASE_TARGET" == *"android"* ]]; then
-            ZIG_TARGET="${BASE_TARGET}24"
-          fi
-          
-          # 3. 获取用户输入的附加参数
+          # 2. 获取用户输入的附加参数
           ARGS="${{ github.event.inputs.extra_args }}"
           
           if [[ "$BASE_TARGET" == *musl* && -z "$ARGS" ]]; then
             ARGS="--no-default-features --features static-download"
           fi
           
+          if [[ "$BASE_TARGET" == *"android"* ]]; then
+            export RUSTFLAGS="$RUSTFLAGS -C link-arg=-target -C link-arg=${BASE_TARGET}24"
+          fi
+          
           echo "----------------------------------------"
           echo "基础目标架构: $BASE_TARGET"
-          echo "Zig 编译目标: $ZIG_TARGET"
           echo "Cargo 附加参数: $ARGS"
+          echo "最终启用的 RUSTFLAGS: $RUSTFLAGS"
           echo "----------------------------------------"
           
           cargo zigbuild --release --locked \
-            --target "$ZIG_TARGET" \
+            --target "$BASE_TARGET" \
             $ARGS
 
       - name: UPX 压缩
