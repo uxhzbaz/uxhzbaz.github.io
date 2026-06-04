@@ -1,10 +1,23 @@
 name: tgt
+
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       extra_args:
+        description: 'Extra cargo arguments'
         required: false
         default: ''
+
+env:
+  PKG: tgt
+  VERSION: v1.0.0-rc1
+  URL: https://github.com/FedericoBruzzone/tgt/archive/refs/tags/v1.0.0-rc1.tar.gz
+  ALSA_NO_PKG_CONFIG: '1'
+  ALSA_STATIC: '1'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,26 +26,25 @@ jobs:
         t: [aarch64-linux-android]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.t }}
-      - name: Install NDK tool
-        run: cargo install cargo-ndk
-      - name: Compile
-        env:
-          ALSA_NO_PKG_CONFIG: '1'
-          ALSA_STATIC: '1'
+
+      - name: Install Tools
         run: |
+          cargo install cargo-ndk
+
+      - name: Compile
+        run: |
+          BASE_TARGET="${{ matrix.t }}"
           ARGS="${{ github.event.inputs.extra_args }}"
-          if [[ "${{ matrix.t }}" == *musl* && -z "$ARGS" ]]; then
+          if [[ "$BASE_TARGET" == *musl* && -z "$ARGS" ]]; then
             ARGS="--no-default-features --features static-download"
           fi
-          if [[ "${{ matrix.t }}" == *"android"* ]]; then
-            cargo ndk --target ${{ matrix.t }} --android-platform 24 build --release --locked $ARGS
+          if [[ "$BASE_TARGET" == *"android"* ]]; then
+            cargo ndk --target "$BASE_TARGET" --platform 24 build --release --locked $ARGS
           else
-            cargo build --target ${{ matrix.t }} --release --locked $ARGS
+            cargo build --release --locked --target "$BASE_TARGET" $ARGS
           fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tgt-${{ matrix.t }}
-          path: target/${{ matrix.t }}/release/tgt
