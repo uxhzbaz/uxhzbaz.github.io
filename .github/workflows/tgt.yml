@@ -88,10 +88,20 @@ jobs:
               || printf '\n[profile.release]\nstrip = true\n' >> Cargo.toml)
 
       - name: 编译
+        env:
+          ALSA_NO_PKG_CONFIG: '1'
+          ALSA_STATIC: '1'
+          BINDGEN_EXTRA_CLANG_ARGS: '--sysroot=/usr'
         run: |
+          TARGET="${{ matrix.t }}"
+          
+          # 如果目标三元组包含 android，则为其动态追加 API 版本号 .24
+          if [[ "$TARGET" == *"android"* ]]; then
+            TARGET="${TARGET}.24"
+          fi
+          
           cargo zigbuild --release --locked \
-            --target ${{ matrix.t }} \
-            --no-default-features \
+            --target "$TARGET" \
             ${{ github.event.inputs.extra_args }}
           
           # 如果目标三元组包含 musl，且用户没有手动输入参数，
