@@ -36,6 +36,10 @@ jobs:
         run: |
           cargo install cargo-ndk
 
+      - name: Download Source
+        run: |
+          curl -L "$URL" | tar -xz --strip-components=1
+
       - name: Compile
         run: |
           BASE_TARGET="${{ matrix.t }}"
