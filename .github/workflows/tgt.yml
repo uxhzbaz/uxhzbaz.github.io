@@ -93,28 +93,29 @@ jobs:
           ALSA_STATIC: '1'
           BINDGEN_EXTRA_CLANG_ARGS: '--sysroot=/usr'
         run: |
-          TARGET="${{ matrix.t }}"
+          BASE_TARGET="${{ matrix.t }}"
+          ZIG_TARGET="$BASE_TARGET"
           
-          # 如果目标三元组包含 android，则为其动态追加 API 版本号 .24
-          if [[ "$TARGET" == *"android"* ]]; then
-            TARGET="${TARGET}.24"
+          # 注意：必须是 android24 格式，绝对不能加点号 '.'
+          if [[ "$BASE_TARGET" == *"android"* ]]; then
+            ZIG_TARGET="${BASE_TARGET}24"
           fi
           
-          cargo zigbuild --release --locked \
-            --target "$TARGET" \
-            ${{ github.event.inputs.extra_args }}
+          # 3. 获取用户输入的附加参数
+          ARGS="${{ github.event.inputs.extra_args }}"
           
-          # 如果目标三元组包含 musl，且用户没有手动输入参数，
-          # 则自动剔除带 alsa/audiopus 依赖的音频特性，只保留核心静态打包特性
-          if [[ "${{ matrix.t }}" == *musl* && -z "$ARGS" ]]; then
+          if [[ "$BASE_TARGET" == *musl* && -z "$ARGS" ]]; then
             ARGS="--no-default-features --features static-download"
           fi
           
-          echo "正在编译目标 ${{ matrix.t }}，附加参数: $ARGS"
+          echo "----------------------------------------"
+          echo "基础目标架构: $BASE_TARGET"
+          echo "Zig 编译目标: $ZIG_TARGET"
+          echo "Cargo 附加参数: $ARGS"
+          echo "----------------------------------------"
           
-          # 使用 cargo-zigbuild 进行交叉编译（移除了会导致 panic 的 ALSA 环境变量）
           cargo zigbuild --release --locked \
-            --target ${{ matrix.t }} \
+            --target "$ZIG_TARGET" \
             $ARGS
 
       - name: UPX 压缩
