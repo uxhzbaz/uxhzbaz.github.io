@@ -1,0 +1,172 @@
+name: Build dinotty-server
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  SOURCE_URL: https://github.com/xichan96/dinotty/archive/refs/tags/v0.4.0.tar.gz
+  SOURCE_DIR: dinotty-0.4.0
+  PACKAGE: dinotty-server
+
+jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Download and extract source
+        run: |
+          curl -fsSL "$SOURCE_URL" -o source.tar.gz
+          tar -xzf source.tar.gz
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.SOURCE_DIR }}/frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: ${{ env.SOURCE_DIR }}/frontend
+        run: pnpm build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: ${{ env.SOURCE_DIR }}/frontend/dist/
+          retention-days: 1
+
+  build-server:
+    needs: build-frontend
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_zigbuild: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_zigbuild: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            use_zigbuild: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_zigbuild: false
+
+    steps:
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            python3-pip
+          pip3 install ziglang --break-system-packages
+
+      - name: Download and extract source
+        run: |
+          curl -fsSL "$SOURCE_URL" -o source.tar.gz
+          tar -xzf source.tar.gz
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: ${{ env.SOURCE_DIR }}/frontend/dist/
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ matrix.target }}-cargo-${{ hashFiles(format('{0}/Cargo.lock', env.SOURCE_DIR)) }}
+          restore-keys: ${{ matrix.target }}-cargo-
+
+      - name: Install cargo-zigbuild (Linux)
+        if: matrix.use_zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Build with cargo-zigbuild (Linux musl)
+        if: matrix.use_zigbuild
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p ${{ env.PACKAGE }}
+
+      - name: Build with cargo (macOS)
+        if: '!matrix.use_zigbuild'
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: cargo build --release --target ${{ matrix.target }} -p ${{ env.PACKAGE }}
+
+      - name: Strip binary (Linux)
+        if: runner.os == 'Linux'
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: |
+          BIN="target/${{ matrix.target }}/release/${{ env.PACKAGE }}"
+          if command -v llvm-strip &>/dev/null; then
+            llvm-strip "$BIN" || true
+          else
+            strip "$BIN" || true
+          fi
+
+      - name: Strip binary (macOS)
+        if: runner.os == 'macOS'
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: strip "target/${{ matrix.target }}/release/${{ env.PACKAGE }}" || true
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}-${{ matrix.target }}
+          path: ${{ env.SOURCE_DIR }}/target/${{ matrix.target }}/release/${{ env.PACKAGE }}
+
+  release:
+    needs: build-server
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dinotty-server-*
+          path: binaries/
+          merge-multiple: false
+
+      - name: Rename and compress binaries
+        run: |
+          mkdir -p release
+          for dir in binaries/*/; do
+            target="$(basename "$dir")"
+            target="${target#dinotty-server-}"
+            bin="$dir/dinotty-server"
+            if [ -f "$bin" ]; then
+              cp "$bin" "release/dinotty-server-${target}"
+              gzip -k "release/dinotty-server-${target}"
+            fi
+          done
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
