@@ -149,7 +149,7 @@ jobs:
           make install_sw
           cd ../..
 
-       - name: 编译 libssh2
+          - name: 编译 libssh2
          run: |
           cd src
           curl -fsSL https://libssh2.org/download/libssh2-1.11.1.tar.gz | tar xz
