@@ -135,14 +135,14 @@ jobs:
           make install
           cd ../..
 
-      # 编译 OpenSSL (静态, 无共享)
+      # 编译 OpenSSL
       - name: 编译 OpenSSL
         run: |
           cd src
           curl -fsSL https://www.openssl.org/source/openssl-3.5.0.tar.gz | tar xz
           cd openssl-3.5.0
           ./Configure linux-aarch64 \
-            --cross-compile-prefix="${{ github.workspace }}/toolchain/bin/${{ steps.env.outputs.TC }}-" \
+            --cross-compile-prefix="${{ steps.env.outputs.TC }}-" \
             --prefix="${{ steps.env.outputs.PREFIX }}" \
             --openssldir="${{ steps.env.outputs.PREFIX }}/ssl" \
             no-shared no-tests CFLAGS="$CFLAGS"
