@@ -149,21 +149,21 @@ jobs:
           make install_sw
           cd ../..
 
-          - name: 编译 libssh2
-         run: |
+      - name: 编译 libssh2
+        run: |
           cd src
           curl -fsSL https://libssh2.org/download/libssh2-1.11.1.tar.gz | tar xz
           cd libssh2-1.11.1
           ./configure --host="${{ steps.env.outputs.TC }}" \
-          --prefix="${{ steps.env.outputs.PREFIX }}" \
-          CC=$CC AR=$AR RANLIB=$RANLIB \
-          CFLAGS="$CFLAGS" \
-          CPPFLAGS="-I${{ steps.env.outputs.PREFIX }}/include" \
-          LDFLAGS="$LDFLAGS" \
-          --disable-shared --enable-static \
-          --with-crypto=openssl \
-          --with-libssl-prefix="${{ steps.env.outputs.PREFIX }}" \
-          --with-libz-prefix="${{ steps.env.outputs.PREFIX }}"
+            --prefix="${{ steps.env.outputs.PREFIX }}" \
+            CC=$CC AR=$AR RANLIB=$RANLIB \
+            CFLAGS="$CFLAGS" \
+            CPPFLAGS="-I${{ steps.env.outputs.PREFIX }}/include" \
+            LDFLAGS="$LDFLAGS" \
+            --disable-shared --enable-static \
+            --with-crypto=openssl \
+            --with-libssl-prefix="${{ steps.env.outputs.PREFIX }}" \
+            --with-libz-prefix="${{ steps.env.outputs.PREFIX }}"
           make -j$(nproc)
           make install
           cd ../..
