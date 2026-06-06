@@ -1,0 +1,246 @@
+name: build zpaqfranz
+run-name: ${{ github.event.inputs.run_name || github.actor }}
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: '工作流运行名称'
+        default: ''
+        required: false
+      version:
+        description: 'zpaqfranz 版本 (tag 或 branch)'
+        default: '64.7'
+      source_url:
+        description: 'zpaqfranz.cpp 源文件 URL'
+        default: 'https://github.com/fcorbelli/zpaqfranz/raw/64.7/zpaqfranz.cpp'
+      targets:
+        description: '目标三元组，逗号分隔'
+        default: 'x86_64-linux-musl,aarch64-linux-musl,i686-linux-musl,armv7-linux-musleabi'
+      toolchain_tag:
+        description: 'musl-cross 工具链 release tag'
+        default: '20260515'
+
+env:
+  TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/${{ github.event.inputs.toolchain_tag }}'
+
+jobs:
+  parse:
+    name: 解析目标列表
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      first_key: ${{ steps.set-matrix.outputs.first_key }}
+    steps:
+      - id: set-matrix
+        shell: bash
+        env:
+          TARGETS: ${{ github.event.inputs.targets }}
+        run: |
+          include='[]'
+          first_key=''
+          IFS=',' read -ra TS <<< "$TARGETS"
+          for t in "${TS[@]}"; do
+            t="${t# }"; t="${t% }"
+            case "$t" in
+              x86_64-linux-musl)            tc_triple="x86_64-unknown-linux-musl"    ;;
+              aarch64-linux-musl)           tc_triple="aarch64-unknown-linux-musl"   ;;
+              i686-linux-musl)              tc_triple="i686-unknown-linux-musl"      ;;
+              arm-linux-musleabi)           tc_triple="arm-unknown-linux-musleabi"   ;;
+              armv7-linux-musleabi)         tc_triple="armv7-unknown-linux-musleabi" ;;
+              x86_64-unknown-linux-musl)    tc_triple="x86_64-unknown-linux-musl"    ;;
+              aarch64-unknown-linux-musl)   tc_triple="aarch64-unknown-linux-musl"   ;;
+              i686-unknown-linux-musl)      tc_triple="i686-unknown-linux-musl"      ;;
+              arm-unknown-linux-musleabi)   tc_triple="arm-unknown-linux-musleabi"   ;;
+              armv7-unknown-linux-musleabi) tc_triple="armv7-unknown-linux-musleabi" ;;
+              *)
+                echo "::warning::未知目标 $t，跳过"
+                continue
+                ;;
+            esac
+            tc_url="${TOOLCHAIN_BASE}/${tc_triple}.tar.xz"
+            include=$(jq \
+              --arg t "$t" --arg tc_triple "$tc_triple" --arg tc_url "$tc_url" \
+              '. += [{"t":$t,"tc_triple":$tc_triple,"tc_url":$tc_url}]' \
+              <<< "$include")
+            [[ -z "$first_key" ]] && first_key="$t"
+          done
+          echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
+          echo "first_key=$first_key" >> $GITHUB_OUTPUT
+
+  build:
+    needs: parse
+    name: ${{ matrix.t }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.parse.outputs.matrix) }}
+    steps:
+      - name: 安装构建依赖
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: gettext file
+          version: 1.0
+
+      - name: 缓存工具链
+        id: cache-tc
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/toolchain
+          key: musl-toolchain-${{ matrix.tc_triple }}-${{ github.event.inputs.toolchain_tag }}
+
+      - name: 下载并解压工具链
+        if: steps.cache-tc.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.tar.xz
+          mkdir -p "${{ github.workspace }}/toolchain"
+          tar -xf toolchain.tar.xz -C "${{ github.workspace }}/toolchain" --strip-components=1
+
+      - name: 下载 zpaqfranz 源码
+        run: |
+          curl -fsSL --retry 3 "${{ github.event.inputs.source_url }}" -o zpaqfranz.cpp
+
+      - name: 编译依赖 (zlib, openssl, libssh2, curl)
+        run: |
+          set -euo pipefail
+          TC_TRIPLE="${{ matrix.tc_triple }}"
+          TOOLCHAIN_DIR="${{ github.workspace }}/toolchain"
+          SYSROOT="$TOOLCHAIN_DIR/$TC_TRIPLE/sysroot"
+          PREFIX="$SYSROOT/usr"
+          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+          export CC="${TC_TRIPLE}-gcc"
+          export CXX="${TC_TRIPLE}-g++"
+          export AR="${TC_TRIPLE}-ar"
+          export RANLIB="${TC_TRIPLE}-ranlib"
+          export STRIP="${TC_TRIPLE}-strip"
+          export CFLAGS="-O2 -fPIC"
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+
+          mkdir -p "$PREFIX"/{lib,include,bin}
+
+          # zlib 1.3.1
+          curl -fsSL https://zlib.net/zlib-1.3.1.tar.gz | tar xz
+          cd zlib-1.3.1
+          CC=$CC AR=$AR RANLIB=$RANLIB CFLAGS="$CFLAGS" ./configure --prefix="$PREFIX" --static
+          make -j$(nproc) && make install
+          cd ..
+
+          # OpenSSL 3.5.0
+          curl -fsSL https://www.openssl.org/source/openssl-3.5.0.tar.gz | tar xz
+          cd openssl-3.5.0
+          ./Configure linux-aarch64 --cross-compile-prefix="$TOOLCHAIN_DIR/bin/${TC_TRIPLE}-" \
+            --prefix="$PREFIX" --openssldir="$PREFIX/ssl" no-shared no-tests CFLAGS="$CFLAGS"
+          make -j$(nproc) && make install_sw
+          cd ..
+
+          # libssh2 1.11.1
+          curl -fsSL https://libssh2.org/download/libssh2-1.11.1.tar.gz | tar xz
+          cd libssh2-1.11.1
+          ./configure --host="$TC_TRIPLE" --prefix="$PREFIX" \
+            CC=$CC AR=$AR RANLIB=$RANLIB \
+            CFLAGS="$CFLAGS" LDFLAGS="-L$PREFIX/lib" \
+            --disable-shared --enable-static \
+            --with-crypto=openssl
+          make -j$(nproc) && make install
+          cd ..
+
+          # curl 8.13.0 (shared lib)
+          curl -fsSL https://curl.se/download/curl-8.13.0.tar.gz | tar xz
+          cd curl-8.13.0
+          ./configure --host="$TC_TRIPLE" --prefix="$PREFIX" \
+            CC=$CC AR=$AR RANLIB=$RANLIB \
+            CFLAGS="$CFLAGS" LDFLAGS="-L$PREFIX/lib -static-libgcc" \
+            --enable-shared --disable-static \
+            --with-openssl="$PREFIX" \
+            --with-libssh2="$PREFIX" \
+            --with-zlib="$PREFIX" \
+            --without-libidn2 --without-nghttp2 --without-brotli \
+            --disable-ldap --disable-ldaps --disable-dict --disable-gopher \
+            --disable-imap --disable-mqtt --disable-pop3 --disable-rtsp \
+            --disable-smb --disable-smtp --disable-telnet --disable-tftp
+          make -j$(nproc) && make install
+          cd ..
+
+      - name: 编译 zpaqfranz
+        run: |
+          TC_TRIPLE="${{ matrix.tc_triple }}"
+          TOOLCHAIN_DIR="${{ github.workspace }}/toolchain"
+          SYSROOT="$TOOLCHAIN_DIR/$TC_TRIPLE/sysroot"
+          PREFIX="$SYSROOT/usr"
+          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+          export CXX="${TC_TRIPLE}-g++"
+          export STRIP="${TC_TRIPLE}-strip"
+
+          # 检测是否为 x86 架构，若不是则添加 -DNOJIT
+          JIT_FLAG=""
+          if [[ "${{ matrix.tc_triple }}" != x86_64-unknown-linux-musl && \
+                "${{ matrix.tc_triple }}" != i686-unknown-linux-musl ]]; then
+            JIT_FLAG="-DNOJIT"
+          fi
+
+          $CXX -O3 -pthread -DSFTP $JIT_FLAG \
+            -static-libgcc -static-libstdc++ \
+            -I"$PREFIX/include" -L"$PREFIX/lib" \
+            -Wl,-rpath,'$ORIGIN' \
+            zpaqfranz.cpp -lm -ldl -o zpaqfranz
+
+          $STRIP zpaqfranz
+          cp "$PREFIX/lib/libcurl.so.4" .
+
+      - name: 收集产物
+        run: |
+          TARGET="${{ matrix.t }}"
+          mkdir -p "dist/$TARGET"
+          cp zpaqfranz "dist/$TARGET/"
+          cp libcurl.so.4 "dist/$TARGET/"
+
+          # 可选：复制 README 或 license
+          echo "产物列表:"
+          find dist -type f | sort
+
+      - name: 验证动态库依赖
+        run: |
+          TC_TRIPLE="${{ matrix.tc_triple }}"
+          TOOLCHAIN_DIR="${{ github.workspace }}/toolchain"
+          READELF="$TOOLCHAIN_DIR/bin/${TC_TRIPLE}-readelf"
+          echo "=== zpaqfranz 需要的动态库 ==="
+          $READELF -d dist/${{ matrix.t }}/zpaqfranz | grep NEEDED || true
+          echo "=== libcurl.so.4 需要的动态库 ==="
+          $READELF -d dist/${{ matrix.t }}/libcurl.so.4 | grep NEEDED || true
+
+      - name: 打包产物
+        run: |
+          TARGET="${{ matrix.t }}"
+          tar -cJf "${TARGET}.tar.xz" -C "dist/$TARGET" .
+          echo "打包: ${TARGET}.tar.xz ($(ls -lh "${TARGET}.tar.xz" | awk '{print $5}'))"
+
+      - name: 生成摘要 (仅第一个目标展示帮助)
+        env:
+          IS_FIRST: ${{ matrix.t == needs.parse.outputs.first_key }}
+        run: |
+          TARGET="${{ matrix.t }}"
+          {
+            echo "## \`${TARGET}\`"
+            echo ""
+            echo "### 📦 产物"
+            echo "| 文件 | 大小 |"
+            echo "|---|---|"
+            ls -lh "dist/$TARGET" | awk '{print "| `"$9"` | "$5" |"}'
+          } >> $GITHUB_STEP_SUMMARY
+
+          if [[ "$IS_FIRST" == "true" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 💡 帮助信息 (\`zpaqfranz --help\`)" >> $GITHUB_STEP_SUMMARY
+            echo '<details>' >> $GITHUB_STEP_SUMMARY
+            echo '<summary>点击展开</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            ./zpaqfranz --help 2>&1 >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.t }}
+          path: ${{ matrix.t }}.tar.xz
