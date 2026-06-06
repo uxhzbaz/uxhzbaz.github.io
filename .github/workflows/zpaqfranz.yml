@@ -182,7 +182,7 @@ jobs:
             --with-openssl="${{ steps.env.outputs.PREFIX }}" \
             --with-libssh2="${{ steps.env.outputs.PREFIX }}" \
             --with-zlib="${{ steps.env.outputs.PREFIX }}" \
-            --without-libidn2 --without-nghttp2 --without-brotli \
+            --without-libidn2 --without-nghttp2 --without-brotli --without-libpsl \
             --disable-ldap --disable-ldaps \
             --disable-dict --disable-gopher --disable-imap \
             --disable-mqtt --disable-pop3 --disable-rtsp \
