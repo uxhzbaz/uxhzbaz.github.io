@@ -128,7 +128,7 @@ jobs:
         run: |
           cd src
           curl -fsSL https://zlib.net/zlib-1.3.2.tar.gz | tar xz
-          cd zlib-1.3.1
+          cd zlib-1.3.2
           CC=$CC AR=$AR RANLIB=$RANLIB CFLAGS="$CFLAGS" \
             ./configure --prefix="${{ steps.env.outputs.PREFIX }}" --static
           make -j$(nproc)
