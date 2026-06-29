@@ -113,6 +113,8 @@ jobs:
           fi
 
       - name: 编译并安装
+        env:
+          BUILD_CMD: ${{ github.event.inputs.build_command }}
         run: |
           API="${{ github.event.inputs.api_level }}"
           ABI="${{ matrix.t }}"
@@ -136,8 +138,10 @@ jobs:
           export XGETTEXT="$(which xgettext)"
           mkdir -p "$INST"
           cd src
-          bash -c "${{ github.event.inputs.build_command }}"
-
+          printf '%s\n' "$BUILD_CMD" > /tmp/build_step.sh
+          cat -A /tmp/build_step.sh | head -5   # 调试用：确认换行符确实存在（看到$符号说明换行正常）
+          chmod +x /tmp/build_step.sh
+          bash /tmp/build_step.sh
       - name: 收集产物
         run: |
           INST="${{ github.workspace }}/install"
