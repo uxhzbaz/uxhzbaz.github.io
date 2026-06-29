@@ -72,65 +72,78 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "versionCode=$VERSIONCODE" >> $GITHUB_OUTPUT
 
+      - name: Patch module.prop with updateJson
+        if: steps.check.outputs.changed == 'true'
+        working-directory: OpenEUICC
+        run: |
+          PROP="app/build/magisk/release/module.prop"
+          grep -v '^updateJson=' "$PROP" > module.prop.tmp
+          echo "updateJson=https://raw.githubusercontent.com/uxhzbaz/uxhzbaz.github.io/main/openeuicc.json" >> module.prop.tmp
+          mv module.prop.tmp "$PROP"
+
       - name: Repack Magisk module with max compression
         if: steps.check.outputs.changed == 'true'
         working-directory: OpenEUICC/app/build/magisk/release
         run: |
-          zip -r -9 -X ../../../../../magisk-release-max.zip .
+          zip -r -9 -X "../../../../../OpenEUICC-Magisk_module-v${{ steps.ver.outputs.version }}-priv(${{ steps.ver.outputs.versionCode }}).zip" .
 
-      - name: Locate unpriv APK
+      - name: Locate and rename unpriv APK
         if: steps.check.outputs.changed == 'true'
-        id: unpriv
         working-directory: OpenEUICC
         run: |
           apk_path=$(find app-unpriv/build/outputs/apk/release -name "*.apk" | head -n1)
-          cp "$apk_path" ../unpriv-release.apk
-          echo "found=true" >> $GITHUB_OUTPUT
+          cp "$apk_path" "../EasyEUICC-v${{ steps.ver.outputs.version }}-unpriv(${{ steps.ver.outputs.versionCode }}).apk"
 
-      - name: Generate update.json
+      - name: Compute SHA256
+        if: steps.check.outputs.changed == 'true'
+        id: sha
+        run: |
+          ZIP_NAME="OpenEUICC-Magisk_module-v${{ steps.ver.outputs.version }}-priv(${{ steps.ver.outputs.versionCode }}).zip"
+          APK_NAME="EasyEUICC-v${{ steps.ver.outputs.version }}-unpriv(${{ steps.ver.outputs.versionCode }}).apk"
+          ZIP_SHA=$(sha256sum "$ZIP_NAME" | awk '{print $1}')
+          APK_SHA=$(sha256sum "$APK_NAME" | awk '{print $1}')
+          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
+          echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+          echo "zip_sha=$ZIP_SHA" >> $GITHUB_OUTPUT
+          echo "apk_sha=$APK_SHA" >> $GITHUB_OUTPUT
+
+      - name: Update openeuicc.json in repo
         if: steps.check.outputs.changed == 'true'
         run: |
-          cat > update.json << EOF
+          cat > openeuicc.json << EOF
           {
             "version": "${{ steps.ver.outputs.version }}",
             "versionCode": ${{ steps.ver.outputs.versionCode }},
-            "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/v${{ steps.ver.outputs.version }}/magisk-release-max.zip",
+            "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/v${{ steps.ver.outputs.version }}/${{ steps.sha.outputs.zip_name }}",
             "changelog": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/tag/v${{ steps.ver.outputs.version }}"
           }
-          EOF
-
-      - name: Generate SHA256 checksums (Markdown)
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          ZIP_SHA=$(sha256sum magisk-release-max.zip | awk '{print $1}')
-          APK_SHA=$(sha256sum unpriv-release.apk | awk '{print $1}')
-          cat > checksums.md << EOF
-          # OpenEUICC ${{ steps.ver.outputs.version }} SHA256 校验
-
-          | 文件 | SHA256 |
-          |---|---|
-          | magisk-release-max.zip | \`${ZIP_SHA}\` |
-          | unpriv-release.apk | \`${APK_SHA}\` |
-
-          基于上游commit: \`${{ env.commit_full }}\`
           EOF
 
       - name: Create Release
         if: steps.check.outputs.changed == 'true'
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "magisk-release-max.zip,unpriv-release.apk,update.json,checksums.md"
+          artifacts: "${{ steps.sha.outputs.zip_name }},${{ steps.sha.outputs.apk_name }}"
           name: "OpenEUICC ${{ steps.ver.outputs.version }}"
           tag: "v${{ steps.ver.outputs.version }}"
-          body: "基于上游commit ${{ env.commit_full }}\n\n校验信息见 checksums.md"
+          body: |
+            基于上游commit ${{ env.commit_full }}
+
+            **SHA256校验值**
+
+            `${{ steps.sha.outputs.zip_name }}`
+            `${{ steps.sha.outputs.zip_sha }}`
+
+            `${{ steps.sha.outputs.apk_name }}`
+            `${{ steps.sha.outputs.apk_sha }}`
           token: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Record commit
+      - name: Commit openeuicc.json and last_commit.txt
         if: steps.check.outputs.changed == 'true'
         run: |
           echo "${{ env.commit_full }}" > last_commit.txt
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
-          git add last_commit.txt
-          git commit -m "Update last built commit"
+          git add openeuicc.json last_commit.txt
+          git commit -m "Update to ${{ steps.ver.outputs.version }}"
           git push
