@@ -1,24 +1,8 @@
-name: build cross-compile tools (Android NDK)
-run-name: ${{ github.event.inputs.run_name || format('{0}-{1}', github.event.inputs.tool_name, github.event.inputs.tool_version) }}
+name: Build bash 5.3.9 for Android
+
 on:
   workflow_dispatch:
     inputs:
-      run_name:
-        description: '工作流运行名称'
-        default: ''
-        required: false
-      tool_name:
-        description: '工具名称 (例如: bash, xz, make)'
-        default: 'bash'
-        required: true
-      tool_version:
-        description: '工具版本 (用于打包命名，例如: 5.3)'
-        default: '5.3'
-        required: true
-      source_url:
-        description: '源码包URL (.tar.gz / .tar.xz / .zip 等)'
-        default: 'https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz'
-        required: true
       api_level:
         description: 'Android API Level (minSdk)'
         default: '24'
@@ -27,31 +11,12 @@ on:
         description: 'Android ABI，逗号分隔'
         default: 'aarch64-linux-android,armv7a-linux-androideabi,i686-linux-android,x86_64-linux-android'
         required: true
-      build_command:
-        description: '自定义完整编译命令 (在 src 目录下执行，可使用 $TC, $INST, $API, $NDK 等环境变量)'
-        default: |
-          export WORK_DIR=$(pwd)
-          for i in {1..9}; do curl -fsSL "https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-00$i" | patch -p0 || exit 1; done
-          sed -i 's|/\* #define SYS_BASHRC "/etc/bash.bashrc" \*/|#define SYS_BASHRC "/etc/bashrc"|' config-top.h
-          sed -i 's|/\* #define SYS_BASH_LOGOUT "/etc/bash.bash_logout" \*/|#define SYS_BASH_LOGOUT "/etc/bash_logout"|' config-top.h
-          sed -i 's|/\*#define HISTSIZE_DEFAULT "500"\*/|#define HISTSIZE_DEFAULT "10000"|' config-top.h
-          sed -i 's|"/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:."|"/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/apex/com.android.virt/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin:."|' config-top.h
-          mkdir -p ../ncurses && cd ../ncurses
-          curl -fsSL --retry 3 https://ftp.gnu.org/pub/gnu/ncurses/ncurses-6.4.tar.gz -o ncurses.tar.gz
-          tar -xf ncurses.tar.gz --strip-components=1
-          ./configure --host="${TC}" --build=x86_64-linux-gnu CC_FOR_BUILD=gcc --prefix="${WORK_DIR}/../ncurses/inst" --enable-static --disable-shared --with-shared=no --without-progs --without-tests --without-ada --without-manpages --without-cxx-binding --with-fallbacks="xterm,xterm-256color,linux,vt100,screen,screen-256color,tmux,tmux-256color" CFLAGS="-Os" LDFLAGS=""
-          make -j$(nproc)
-          make install
-          cd ../src
-          export bash_cv_job_control_missing=present bash_cv_sys_named_pipes=present bash_cv_func_sigsetjmp=present bash_cv_printf_a_format=yes
-          NC_INST="${WORK_DIR}/../ncurses/inst"
-          ./configure --host="${TC}" --prefix=/usr --disable-dependency-tracking --disable-shared --enable-static --without-bash-malloc CPPFLAGS="-I${NC_INST}/include -I${NC_INST}/include/ncurses" LDFLAGS="-L${NC_INST}/lib" CFLAGS="-Os"
-          make -j$(nproc)
-          make install DESTDIR="${INST}"
-        required: true
 
 env:
   NDK_VERSION: '26.1.10909125'
+  BASH_VERSION: '5.3'
+  BASH_FULL_VERSION: '5.3.9'
+  NCURSES_VERSION: '6.4'
 
 jobs:
   s:
@@ -64,17 +29,13 @@ jobs:
         shell: bash
         env:
           TARGETS: ${{ github.event.inputs.targets }}
-          API: ${{ github.event.inputs.api_level }}
         run: |
           include='[]'
           IFS=',' read -ra TS <<< "$TARGETS"
           for t in "${TS[@]}"; do
             t="${t# }"; t="${t% }"
             [[ -z "$t" ]] && continue
-            # clang target 三元组(带api level),host triple用于 --host
-            tc_triple="${t}${API}"
-            include=$(jq --arg t "$t" --arg tc_triple "$tc_triple" \
-              '. += [{"t":$t,"tc_triple":$tc_triple}]' <<< "$include")
+            include=$(jq --arg t "$t" '. += [{"t":$t}]' <<< "$include")
           done
           echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
 
@@ -92,94 +53,101 @@ jobs:
           packages: gettext
           version: 1.0
 
-      - name: 设置 Android SDK / NDK
+      - name: 设置 Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: 安装指定版本 NDK
+      - name: 安装 NDK
         run: |
           sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
 
-      - name: 下载并解压源码
-        run: |
-          URL="${{ github.event.inputs.source_url }}"
-          curl -fsSL --retry 3 --retry-delay 5 "$URL" -o src_archive
-          mkdir -p src
-          if file src_archive | grep -q 'Zip archive'; then
-            unzip -q src_archive -d src_tmp
-            mv src_tmp/*/* src/ || mv src_tmp/* src/
-          else
-            tar -xf src_archive -C src --strip-components=1
-          fi
-
-      - name: 编译并安装
-        env:
-          BUILD_CMD: ${{ github.event.inputs.build_command }}
+      - name: 设置工具链环境变量
         run: |
           API="${{ github.event.inputs.api_level }}"
           ABI="${{ matrix.t }}"
-          NDK="${ANDROID_NDK_HOME}"
-          TOOLCHAIN_BIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export TC="${ABI}"
-          export NDK="${NDK}"
-          export API="${API}"
-          export INST="${{ github.workspace }}/install"
-          export PATH="${TOOLCHAIN_BIN}:$PATH"
-          export CC="${TOOLCHAIN_BIN}/${ABI}${API}-clang"
-          export CXX="${TOOLCHAIN_BIN}/${ABI}${API}-clang++"
-          export AR="${TOOLCHAIN_BIN}/llvm-ar"
-          export RANLIB="${TOOLCHAIN_BIN}/llvm-ranlib"
-          export STRIP="${TOOLCHAIN_BIN}/llvm-strip"
-          export LD="${TOOLCHAIN_BIN}/ld.lld"
-          export CFLAGS="-Os -fPIC"
-          export PKG_CONFIG="false"
-          export MSGFMT="$(which msgfmt)"
-          export MSGMERGE="$(which msgmerge)"
-          export XGETTEXT="$(which xgettext)"
-          mkdir -p "$INST"
-          cd src
-          printf '%s\n' "$BUILD_CMD" > /tmp/build_step.sh
-          cat -A /tmp/build_step.sh | head -5   # 调试用：确认换行符确实存在（看到$符号说明换行正常）
-          chmod +x /tmp/build_step.sh
-          bash /tmp/build_step.sh
+          TOOLCHAIN_BIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "TC=${ABI}" >> $GITHUB_ENV
+          echo "API=${API}" >> $GITHUB_ENV
+          echo "INST=${{ github.workspace }}/install" >> $GITHUB_ENV
+          echo "${TOOLCHAIN_BIN}" >> $GITHUB_PATH
+          echo "CC=${TOOLCHAIN_BIN}/${ABI}${API}-clang" >> $GITHUB_ENV
+          echo "CXX=${TOOLCHAIN_BIN}/${ABI}${API}-clang++" >> $GITHUB_ENV
+          echo "AR=${TOOLCHAIN_BIN}/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=${TOOLCHAIN_BIN}/llvm-ranlib" >> $GITHUB_ENV
+          echo "STRIP=${TOOLCHAIN_BIN}/llvm-strip" >> $GITHUB_ENV
+          echo "LD=${TOOLCHAIN_BIN}/ld.lld" >> $GITHUB_ENV
+          echo "CFLAGS=-Os -fPIC" >> $GITHUB_ENV
+          echo "PKG_CONFIG=false" >> $GITHUB_ENV
+
+      - name: 下载 bash 源码
+        run: |
+          curl -fsSL --retry 3 "https://ftp.gnu.org/gnu/bash/bash-${{ env.BASH_VERSION }}.tar.gz" -o bash.tar.gz
+          mkdir -p src
+          tar -xf bash.tar.gz -C src --strip-components=1
+
+      - name: 打补丁 (bash53-001 ~ 009)
+        working-directory: src
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9; do
+            curl -fsSL --retry 3 "https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-00${i}" -o "/tmp/bash53-00${i}.patch"
+            patch -p0 < "/tmp/bash53-00${i}.patch"
+          done
+
+      - name: 修改 config-top.h
+        working-directory: src
+        run: |
+          sed -i 's|/\* #define SYS_BASHRC "/etc/bash.bashrc" \*/|#define SYS_BASHRC "/etc/bashrc"|' config-top.h
+          sed -i 's|/\* #define SYS_BASH_LOGOUT "/etc/bash.bash_logout" \*/|#define SYS_BASH_LOGOUT "/etc/bash_logout"|' config-top.h
+          sed -i 's|/\*#define HISTSIZE_DEFAULT "500"\*/|#define HISTSIZE_DEFAULT "10000"|' config-top.h
+          sed -i 's|"/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:."|"/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/apex/com.android.virt/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin:."|' config-top.h
+
+      - name: 编译 ncurses (静态)
+        run: |
+          mkdir -p ncurses && cd ncurses
+          curl -fsSL --retry 3 "https://ftp.gnu.org/pub/gnu/ncurses/ncurses-${{ env.NCURSES_VERSION }}.tar.gz" -o ncurses.tar.gz
+          tar -xf ncurses.tar.gz --strip-components=1
+          ./configure --host="${TC}" --build=x86_64-linux-gnu CC_FOR_BUILD=gcc \
+            --prefix="${{ github.workspace }}/ncurses/inst" \
+            --enable-static --disable-shared --with-shared=no \
+            --without-progs --without-tests --without-ada --without-manpages --without-cxx-binding \
+            --with-fallbacks="xterm,xterm-256color,linux,vt100,screen,screen-256color,tmux,tmux-256color" \
+            CFLAGS="-Os" LDFLAGS=""
+          make -j$(nproc)
+          make install
+
+      - name: 编译 bash
+        working-directory: src
+        run: |
+          export bash_cv_job_control_missing=present
+          export bash_cv_sys_named_pipes=present
+          export bash_cv_func_sigsetjmp=present
+          export bash_cv_printf_a_format=yes
+          NC_INST="${{ github.workspace }}/ncurses/inst"
+          ./configure --host="${TC}" --prefix=/usr \
+            --disable-dependency-tracking --disable-shared --enable-static --without-bash-malloc \
+            CPPFLAGS="-I${NC_INST}/include -I${NC_INST}/include/ncurses" \
+            LDFLAGS="-L${NC_INST}/lib" CFLAGS="-Os"
+          make -j$(nproc)
+          make install DESTDIR="${INST}"
+
       - name: 收集产物
         run: |
-          INST="${{ github.workspace }}/install"
-          NDK="${ANDROID_NDK_HOME}"
-          STRIP_BIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          STRIP_BIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
           mkdir -p dist
-          # ELF 可执行二进制
           while IFS= read -r -d '' f; do
             file "$f" | grep -qE 'ELF.*executable' || continue
             fname=$(basename "$f")
             "$STRIP_BIN" "$f" 2>/dev/null || true
             cp "$f" "dist/${fname}"
           done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
-          # shell 脚本
-          while IFS= read -r -d '' f; do
-            file "$f" | grep -qiE 'shell script|text' || continue
-            fname=$(basename "$f")
-            cp "$f" "dist/${fname}"
-          done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
           echo "产物列表:"
           find dist -type f | sort
-
-      - name: 检查链接情况
-        run: |
-          while IFS= read -r -d '' f; do
-            file "$f" | grep -qE 'ELF.*executable' || continue
-            echo "--- $(basename "$f") ---"
-            file "$f"
-          done < <(find dist -maxdepth 1 -type f -print0)
-          echo "::notice::Android NDK 通常不支持完全静态链接 libc，上面输出仅供参考，非强制校验项"
 
       - name: 打包产物
         run: |
           ABI="${{ matrix.t }}"
-          TOOL_NAME="${{ github.event.inputs.tool_name }}"
-          TOOL_VERSION="${{ github.event.inputs.tool_version }}"
           API="${{ github.event.inputs.api_level }}"
-          PKG_NAME="${TOOL_NAME}-${TOOL_VERSION}-${ABI}-api${API}"
+          PKG_NAME="bash-${{ env.BASH_FULL_VERSION }}-${ABI}-api${API}"
           tar -cJf "${PKG_NAME}.tar.xz" -C dist .
           sha256sum "${PKG_NAME}.tar.xz" > "${PKG_NAME}.tar.xz.sha256"
           echo "打包完毕: ${PKG_NAME}.tar.xz ($(ls -lh "${PKG_NAME}.tar.xz" | awk '{print $5}'))"
@@ -187,7 +155,7 @@ jobs:
       - name: 上传产物至 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}-${{ matrix.t }}
+          name: bash-${{ env.BASH_FULL_VERSION }}-${{ matrix.t }}
           path: |
             *.tar.xz
             *.tar.xz.sha256
@@ -208,7 +176,7 @@ jobs:
 
       - name: 收集校验和并生成 RELEASE.md
         run: |
-          echo "### 📦 产物及校验和 (Android NDK)" > RELEASE.md
+          echo "### 📦 bash ${{ env.BASH_FULL_VERSION }} for Android" > RELEASE.md
           echo "" >> RELEASE.md
           echo "| 文件名 | SHA256 |" >> RELEASE.md
           echo "| -------- | --------- |" >> RELEASE.md
@@ -222,16 +190,12 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}
-          TOOL_NAME: ${{ github.event.inputs.tool_name }}
-          TOOL_VERSION: ${{ github.event.inputs.tool_version }}
+          TAG_NAME: bash-${{ env.BASH_FULL_VERSION }}
         run: |
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "创建新的 Release: $TAG_NAME"
-            gh release create "$TAG_NAME" --title "$TOOL_NAME $TOOL_VERSION" -F RELEASE.md
+            gh release create "$TAG_NAME" --title "bash ${{ env.BASH_FULL_VERSION }} (Android)" -F RELEASE.md
           fi
           for i in release/*.tar.xz; do
-            echo "正在上传 $i"
             gh release upload "$TAG_NAME" "$i" "${i}.sha256" --clobber
           done
           gh release edit "$TAG_NAME" -F RELEASE.md
