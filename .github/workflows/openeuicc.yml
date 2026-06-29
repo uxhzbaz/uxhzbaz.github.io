@@ -1,0 +1,79 @@
+name: Build OpenEUICC Privileged Release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '40 9 * * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone upstream OpenEUICC
+        run: |
+          git clone --recurse-submodules https://gitea.angry.im/PeterCxy/OpenEUICC.git
+          cd OpenEUICC
+          echo "commit_hash=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "commit_full=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+      - name: Check if new commit
+        id: check
+        run: |
+          if [ -f last_commit.txt ] && [ "$(cat last_commit.txt)" = "${{ env.commit_full }}" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up JDK 17
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        if: steps.check.outputs.changed == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Restore signing keystore
+        if: steps.check.outputs.changed == 'true'
+        working-directory: OpenEUICC
+        run: |
+          echo "${{ secrets.KEYSTORE_JKS_B64 }}" | base64 -d > openeuicc.jks
+          echo "${{ secrets.KEYSTORE_PROPS_B64 }}" | base64 -d > keystore.properties
+          echo "storeFile=$(pwd)/openeuicc.jks" >> keystore.properties
+
+      - name: Build privileged release Magisk module
+        if: steps.check.outputs.changed == 'true'
+        working-directory: OpenEUICC
+        run: ./gradlew --no-daemon :app:assembleReleaseMagiskModule
+
+      - name: Locate artifact
+        if: steps.check.outputs.changed == 'true'
+        id: artifact
+        working-directory: OpenEUICC
+        run: |
+          zip_path=$(find app/build/magisk -name "magisk-release.zip")
+          version=$(./gradlew -q :app:properties | true)
+          echo "zip_path=$zip_path" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        if: steps.check.outputs.changed == 'true'
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "${{ steps.artifact.outputs.zip_path }}"
+          name: "priv-${{ env.commit_hash }}"
+          tag: "priv-${{ env.commit_hash }}"
+          body: "自动构建,基于上游commit ${{ env.commit_full }}"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Record commit
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          echo "${{ env.commit_full }}" > last_commit.txt
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add last_commit.txt
+          git commit -m "Update last built commit"
+          git push
