@@ -5,10 +5,16 @@ on:
   schedule:
     - cron: '40 9 * * *'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
       - name: Clone upstream OpenEUICC
         run: |
           git clone --recurse-submodules https://gitea.angry.im/PeterCxy/OpenEUICC.git
@@ -41,8 +47,12 @@ jobs:
         working-directory: OpenEUICC
         run: |
           echo "${{ secrets.KEYSTORE_JKS_B64 }}" | base64 -d > openeuicc.jks
-          echo "${{ secrets.KEYSTORE_PROPS_B64 }}" | base64 -d > keystore.properties
-          echo "storeFile=$(pwd)/openeuicc.jks" >> keystore.properties
+          ABS_PATH="$(pwd)/openeuicc.jks"
+          echo "${{ secrets.KEYSTORE_PROPS_B64 }}" | base64 -d > keystore.properties.tmp
+          # 去掉旧的storeFile行,换成绝对路径
+          grep -v '^storeFile=' keystore.properties.tmp > keystore.properties
+          echo "storeFile=$ABS_PATH" >> keystore.properties
+          rm keystore.properties.tmp
 
       - name: Build privileged release Magisk module
         if: steps.check.outputs.changed == 'true'
@@ -55,14 +65,28 @@ jobs:
         working-directory: OpenEUICC
         run: |
           zip_path=$(find app/build/magisk -name "magisk-release.zip")
-          version=$(./gradlew -q :app:properties | true)
-          echo "zip_path=$zip_path" >> $GITHUB_OUTPUT
+          echo "zip_path=OpenEUICC/$zip_path" >> $GITHUB_OUTPUT
+
+      - name: Generate updateJson
+        if: steps.check.outputs.changed == 'true'
+        working-directory: OpenEUICC
+        run: |
+          versionCode=$(./gradlew -q :app:properties | grep '^versionCode:' | awk '{print $2}')
+          versionName=$(./gradlew -q :app:properties | grep '^versionName:' | awk '{print $2}')
+          cat > update.json << EOF
+          {
+            "version": "${versionName}",
+            "versionCode": ${versionCode},
+            "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/priv-${{ env.commit_hash }}/magisk-release.zip",
+            "changelog": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/tag/priv-${{ env.commit_hash }}"
+          }
+          EOF
 
       - name: Create Release
         if: steps.check.outputs.changed == 'true'
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "${{ steps.artifact.outputs.zip_path }}"
+          artifacts: "${{ steps.artifact.outputs.zip_path }},OpenEUICC/update.json"
           name: "priv-${{ env.commit_hash }}"
           tag: "priv-${{ env.commit_hash }}"
           body: "自动构建,基于上游commit ${{ env.commit_full }}"
