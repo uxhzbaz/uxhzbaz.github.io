@@ -47,49 +47,82 @@ jobs:
         working-directory: OpenEUICC
         run: |
           echo "${{ secrets.KEYSTORE_JKS_B64 }}" | base64 -d > openeuicc.jks
+          file openeuicc.jks
+          keytool -list -keystore openeuicc.jks -storepass "${{ secrets.KEYSTORE_PASSWORD }}" || (echo "KEYSTORE损坏或密码错误!"; exit 1)
+
           ABS_PATH="$(pwd)/openeuicc.jks"
           echo "${{ secrets.KEYSTORE_PROPS_B64 }}" | base64 -d > keystore.properties.tmp
-          # 去掉旧的storeFile行,换成绝对路径
           grep -v '^storeFile=' keystore.properties.tmp > keystore.properties
           echo "storeFile=$ABS_PATH" >> keystore.properties
           rm keystore.properties.tmp
 
-      - name: Build privileged release Magisk module
+      - name: Build privileged + unprivileged release
         if: steps.check.outputs.changed == 'true'
         working-directory: OpenEUICC
-        run: ./gradlew --no-daemon :app:assembleReleaseMagiskModule
+        run: ./gradlew --no-daemon :app:assembleReleaseMagiskModuleDir :app-unpriv:assembleRelease
 
-      - name: Locate artifact
+      - name: Read version from module.prop
         if: steps.check.outputs.changed == 'true'
-        id: artifact
+        id: ver
         working-directory: OpenEUICC
         run: |
-          zip_path=$(find app/build/magisk -name "magisk-release.zip")
-          echo "zip_path=OpenEUICC/$zip_path" >> $GITHUB_OUTPUT
+          PROP="app/build/magisk/release/module.prop"
+          VERSION=$(grep '^version=' "$PROP" | cut -d= -f2)
+          VERSIONCODE=$(grep '^versionCode=' "$PROP" | cut -d= -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "versionCode=$VERSIONCODE" >> $GITHUB_OUTPUT
 
-      - name: Generate updateJson
+      - name: Repack Magisk module with max compression
         if: steps.check.outputs.changed == 'true'
+        working-directory: OpenEUICC/app/build/magisk/release
+        run: |
+          zip -r -9 -X ../../../../../magisk-release-max.zip .
+
+      - name: Locate unpriv APK
+        if: steps.check.outputs.changed == 'true'
+        id: unpriv
         working-directory: OpenEUICC
         run: |
-          versionCode=$(./gradlew -q :app:properties | grep '^versionCode:' | awk '{print $2}')
-          versionName=$(./gradlew -q :app:properties | grep '^versionName:' | awk '{print $2}')
+          apk_path=$(find app-unpriv/build/outputs/apk/release -name "*.apk" | head -n1)
+          cp "$apk_path" ../unpriv-release.apk
+          echo "found=true" >> $GITHUB_OUTPUT
+
+      - name: Generate update.json
+        if: steps.check.outputs.changed == 'true'
+        run: |
           cat > update.json << EOF
           {
-            "version": "${versionName}",
-            "versionCode": ${versionCode},
-            "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/priv-${{ env.commit_hash }}/magisk-release.zip",
-            "changelog": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/tag/priv-${{ env.commit_hash }}"
+            "version": "${{ steps.ver.outputs.version }}",
+            "versionCode": ${{ steps.ver.outputs.versionCode }},
+            "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/v${{ steps.ver.outputs.version }}/magisk-release-max.zip",
+            "changelog": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/tag/v${{ steps.ver.outputs.version }}"
           }
+          EOF
+
+      - name: Generate SHA256 checksums (Markdown)
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          ZIP_SHA=$(sha256sum magisk-release-max.zip | awk '{print $1}')
+          APK_SHA=$(sha256sum unpriv-release.apk | awk '{print $1}')
+          cat > checksums.md << EOF
+          # OpenEUICC ${{ steps.ver.outputs.version }} SHA256 校验
+
+          | 文件 | SHA256 |
+          |---|---|
+          | magisk-release-max.zip | \`${ZIP_SHA}\` |
+          | unpriv-release.apk | \`${APK_SHA}\` |
+
+          基于上游commit: \`${{ env.commit_full }}\`
           EOF
 
       - name: Create Release
         if: steps.check.outputs.changed == 'true'
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "${{ steps.artifact.outputs.zip_path }},OpenEUICC/update.json"
-          name: "priv-${{ env.commit_hash }}"
-          tag: "priv-${{ env.commit_hash }}"
-          body: "自动构建,基于上游commit ${{ env.commit_full }}"
+          artifacts: "magisk-release-max.zip,unpriv-release.apk,update.json,checksums.md"
+          name: "OpenEUICC ${{ steps.ver.outputs.version }}"
+          tag: "v${{ steps.ver.outputs.version }}"
+          body: "基于上游commit ${{ env.commit_full }}\n\n校验信息见 checksums.md"
           token: "${{ secrets.GITHUB_TOKEN }}"
 
       - name: Record commit
