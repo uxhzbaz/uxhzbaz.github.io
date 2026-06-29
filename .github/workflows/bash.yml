@@ -1,11 +1,11 @@
-name: Build bash 5.3.9 for Android
+name: Build bash 5.3.9 for Android 26
 
 on:
   workflow_dispatch:
     inputs:
       api_level:
         description: 'Android API Level (minSdk)'
-        default: '24'
+        default: '26'
         required: true
       targets:
         description: 'Android ABI，逗号分隔'
