@@ -125,6 +125,7 @@ jobs:
           NC_INST="${{ github.workspace }}/ncurses/inst"
           ./configure --host="${TC}" --prefix=/usr \
             --disable-dependency-tracking --disable-shared --enable-static --without-bash-malloc \
+            --disable-nls \
             CPPFLAGS="-I${NC_INST}/include -I${NC_INST}/include/ncurses" \
             LDFLAGS="-L${NC_INST}/lib" CFLAGS="-Os"
           make -j$(nproc)
