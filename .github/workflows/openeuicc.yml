@@ -85,21 +85,21 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         working-directory: OpenEUICC/app/build/magisk/release
         run: |
-          zip -r -9 -X "../../../../../OpenEUICC-Magisk_module-v${{ steps.ver.outputs.version }}-priv(${{ steps.ver.outputs.versionCode }}).zip" .
+          zip -r -9 -X "../../../../../OpenEUICC-Magisk_module-${{ steps.ver.outputs.version }}-priv.${{ steps.ver.outputs.versionCode }}.zip" .
 
       - name: Locate and rename unpriv APK
         if: steps.check.outputs.changed == 'true'
         working-directory: OpenEUICC
         run: |
           apk_path=$(find app-unpriv/build/outputs/apk/release -name "*.apk" | head -n1)
-          cp "$apk_path" "../EasyEUICC-v${{ steps.ver.outputs.version }}-unpriv(${{ steps.ver.outputs.versionCode }}).apk"
+          cp "$apk_path" "../EasyEUICC-${{ steps.ver.outputs.version }}-unpriv.${{ steps.ver.outputs.versionCode }}.apk"
 
       - name: Compute SHA256
         if: steps.check.outputs.changed == 'true'
         id: sha
         run: |
-          ZIP_NAME="OpenEUICC-Magisk_module-v${{ steps.ver.outputs.version }}-priv(${{ steps.ver.outputs.versionCode }}).zip"
-          APK_NAME="EasyEUICC-v${{ steps.ver.outputs.version }}-unpriv(${{ steps.ver.outputs.versionCode }}).apk"
+          ZIP_NAME="OpenEUICC-Magisk_module-${{ steps.ver.outputs.version }}-priv.${{ steps.ver.outputs.versionCode }}.zip"
+          APK_NAME="EasyEUICC-${{ steps.ver.outputs.version }}-unpriv.${{ steps.ver.outputs.versionCode }}.apk"
           ZIP_SHA=$(sha256sum "$ZIP_NAME" | awk '{print $1}')
           APK_SHA=$(sha256sum "$APK_NAME" | awk '{print $1}')
           echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
@@ -114,8 +114,8 @@ jobs:
           {
             "version": "${{ steps.ver.outputs.version }}",
             "versionCode": ${{ steps.ver.outputs.versionCode }},
-            "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/v${{ steps.ver.outputs.version }}/${{ steps.sha.outputs.zip_name }}",
-            "changelog": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/tag/v${{ steps.ver.outputs.version }}"
+            "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/${{ steps.ver.outputs.version }}/${{ steps.sha.outputs.zip_name }}",
+            "changelog": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/tag/${{ steps.ver.outputs.version }}"
           }
           EOF
 
@@ -125,7 +125,7 @@ jobs:
         with:
           artifacts: "${{ steps.sha.outputs.zip_name }},${{ steps.sha.outputs.apk_name }}"
           name: "OpenEUICC ${{ steps.ver.outputs.version }}"
-          tag: "v${{ steps.ver.outputs.version }}"
+          tag: "${{ steps.ver.outputs.version }}"
           body: |
             基于上游commit ${{ env.commit_full }}
 
