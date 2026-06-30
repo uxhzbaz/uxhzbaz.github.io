@@ -32,8 +32,8 @@ on:
         required: true
 
 env:
-  TOOLCHAIN_TAG: '20260515'
-  TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20260515'
+  TOOLCHAIN_TAG: '2026-06-30-14-51'
+  TOOLCHAIN_BASE: 'https://github.com/uxhzbaz/musl-cross/releases/download/2026-06-30-14-51'
 
 jobs:
   s:
