@@ -32,8 +32,8 @@ on:
         required: true
 
 env:
-  TOOLCHAIN_TAG: '20260430'
-  TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20260430'
+  TOOLCHAIN_TAG: '20260515'
+  TOOLCHAIN_BASE: 'https://github.com/cross-tools/musl-cross/releases/download/20260515'
 
 jobs:
   s:
@@ -94,6 +94,7 @@ jobs:
           curl -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.tar.xz
           mkdir -p "${{ github.workspace }}/toolchain"
           tar -xf toolchain.tar.xz -C "${{ github.workspace }}/toolchain" --strip-components=1
+          rm -f toolchain.tar.xz
 
       - name: 下载并解压源码
         run: |
@@ -176,7 +177,7 @@ jobs:
           PKG_NAME="${TOOL_NAME}-${TOOL_VERSION}-${TARGET}"
 
           tar -cJf "${PKG_NAME}.tar.xz" -C dist .
-          sha256sum "${PKG_NAME}.tar.xz" > "${PKG_NAME}.tar.xz.sha256"
+          echo "$(sha256sum "${PKG_NAME}.tar.xz" | awk '{print $1}')" > "${PKG_NAME}.sha256.txt"
 
           echo "打包完毕: ${PKG_NAME}.tar.xz ($(ls -lh "${PKG_NAME}.tar.xz" | awk '{print $5}'))"
 
@@ -186,7 +187,7 @@ jobs:
           name: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}-${{ matrix.t }}
           path: |
             *.tar.xz
-            *.tar.xz.sha256
+            *.sha256.txt
 
   release:
     needs: build
@@ -202,19 +203,19 @@ jobs:
           pattern: "*"
           merge-multiple: true
 
-      - name: 收集校验和并生成 RELEASE.md
+      - name: 收集校验和
         run: |
-          echo "### 📦 产物及校验和" > RELEASE.md
+          echo "### 📦 效验" > RELEASE.md
           echo "" >> RELEASE.md
           echo "| 文件名 | SHA256 |" >> RELEASE.md
           echo "| -------- | --------- |" >> RELEASE.md
-          for i in release/*.sha256; do
+          for i in release/*.sha256.txt; do
             HASH=$(awk '{print $1}' "$i")
             FILENAME=$(basename "$i" .sha256)
             echo "| \`${FILENAME}\` | \`${HASH}\` |" >> RELEASE.md
           done
 
-      - name: 推送构建产物到 Release
+      - name: 推送到 Release
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -229,7 +230,7 @@ jobs:
 
           for i in release/*.tar.xz; do
             echo "正在上传 $i"
-            gh release upload "$TAG_NAME" "$i" "${i}.sha256" --clobber
+            gh release upload "$TAG_NAME" "$i" --clobber
           done
 
           gh release edit "$TAG_NAME" -F RELEASE.md
