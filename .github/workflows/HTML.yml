@@ -43,7 +43,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./FolkSplash-Src
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build project
         working-directory: ./FolkSplash-Src
