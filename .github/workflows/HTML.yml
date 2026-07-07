@@ -1,0 +1,103 @@
+name: Build Single HTML
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch: # 支持手动点击按钮触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 1. Checkout this repo (Get build script)
+        uses: actions/checkout@v4
+        with:
+          path: 'runner-tools' # 把你自己的脚本下载到 runner-tools 文件夹
+
+      - name: 2. Clone FolkSplash-Web source code
+        run: |
+          git clone https://github.com/LyraVoid/FolkSplash-Web.git FolkSplash-Src
+          # 将你的打包脚本复制到源码根目录下，满足脚本中 __dirname 的路径要求
+          cp runner-tools/build-single-html.js FolkSplash-Src/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Install dependencies
+        working-directory: ./FolkSplash-Src
+        run: pnpm install --frozen-lockfile
+
+      - name: Build project
+        working-directory: ./FolkSplash-Src
+        run: pnpm run build
+
+      - name: Generate single HTML
+        working-directory: ./FolkSplash-Src
+        run: node build-single-html.js
+
+      - name: Calculate file info
+        id: file-info
+        working-directory: ./FolkSplash-Src
+        run: |
+          SIZE=$(stat --format=%s dist/FolkSplash.html)
+          SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
+          HASH=$(sha256sum dist/FolkSplash.html | cut -d' ' -f1)
+          echo "size=$SIZE" >> $GITHUB_OUTPUT
+          echo "size_mb=$SIZE_MB" >> $GITHUB_OUTPUT
+          echo "hash=${HASH:0:8}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolkSplash-single-html
+          path: FolkSplash-Src/dist/FolkSplash.html
+          retention-days: 90
+
+      - name: Create Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: FolkSplash-Src/dist/FolkSplash.html
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update latest Release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: FolkSplash-Src/dist/FolkSplash.html
+          tag_name: latest
+          prerelease: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print summary
+        run: |
+          echo "## ✅ Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Output File:** \`FolkSplash.html\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**File Info:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Size: **${{ steps.file-info.outputs.size_mb }}MB**" >> $GITHUB_STEP_SUMMARY
+          echo "- SHA256: \`${{ steps.file-info.outputs.hash }}...\`" >> $GITHUB_STEP_SUMMARY
