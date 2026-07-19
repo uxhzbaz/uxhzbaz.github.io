@@ -1,4 +1,4 @@
-name: Build LifeRestart (Enhanced)
+name: Build LifeRestart (Enhanced, Fixed)
 
 on:
   workflow_dispatch:
@@ -26,10 +26,12 @@ jobs:
               assert old in s, f"pattern not found for [{desc}] in {path}"
               open(path, "w", encoding="utf-8").write(s.replace(old, new, 1))
 
-          # 1. 天赋抽卡数量 10 -> 300
+          # ------------------------------------------------------------------
+          # 1. 天赋抽卡数量 10 -> 130
+          # ------------------------------------------------------------------
           patch("src/src/index.js",
                 "talentPullCount: 10, // number of talents to pull from the talent pool",
-                "talentPullCount: 300, // number of talents to pull from the talent pool",
+                "talentPullCount: 130, // number of talents to pull from the talent pool（原300会耗尽148个非排他天赋池，导致卡死，改为100）",
                 "talentPullCount")
 
           # 2. 提高好词条(2/3档)出现概率
@@ -38,10 +40,17 @@ jobs:
                 "talentRate: { 1:100, 2:100, 3:100, total: 1000 }, // rate of talent pull（提高优质词条概率）",
                 "talentRate")
 
-          # 3. 天赋选择数量不限制
+          # ------------------------------------------------------------------
+          # 3. 天赋选择数量：不再设为 Infinity，改为与抽取数量一致的有限值（100）
+          #    (Infinity 会让本来只处理"最多3个天赋"的每回合逻辑
+          #     (doTalent 遍历 / 天赋替换递归 talentReplace) 变成要处理上百个，
+          #     其中天赋替换 Talent.replace() 是无深度限制的递归，天赋越多递归
+          #     越深；这被怀疑是"499岁卡死"的根因之一。设为有限值130，
+          #     依然可以"全选"，但不再是无界的)
+          # ------------------------------------------------------------------
           patch("src/src/index.js",
                 "talentSelectLimit: 3, // max number of talents that can be selected",
-                "talentSelectLimit: Infinity, // max number of talents that can be selected（不限制数量）",
+                "talentSelectLimit: 130, // max number of talents that can be selected（不设 Infinity，改为与talentPullCount一致的有限值，避免无界递归卡死）",
                 "talentSelectLimit")
 
           # 5. 天赋列表按品质从高到低排序 + 取消次数限制的按钮逻辑（default / cyber 两套主题）
@@ -78,6 +87,104 @@ jobs:
                 "            unselected.visible = !( selected.visible = this.#selected.has(index) );",
                 "            unselected.visible = !( selected.visible = this.#selected.has(index) );",
                 "cyber per-click label")
+
+          # ------------------------------------------------------------------
+          # 6. [BUGFIX] talentRandom(): 给 grade 回退循环加下限保护
+          #    即使以后 talentPullCount 又被调大到超过卡池总数，也只是少抽
+          #    一些天赋，而不会因为 talentList[grade] 变成 undefined 而抛异常
+          #    卡死点击事件。
+          # ------------------------------------------------------------------
+          patch("src/src/modules/talent.js",
+                "        return new Array(this.#talentPullCount)\n"
+                "            .fill(1).map((v, i)=>{\n"
+                "                if(!i && include) return include;\n"
+                "                let grade = randomGrade();\n"
+                "                while(talentList[grade].length == 0) grade--;\n"
+                "                const length = talentList[grade].length;\n\n"
+                "                const random = Math.floor(Math.random()*length) % length;\n"
+                "                return talentList[grade].splice(random,1)[0];\n"
+                "            });",
+                "        const pool = new Array(this.#talentPullCount)\n"
+                "            .fill(1).map((v, i)=>{\n"
+                "                if(!i && include) return include;\n"
+                "                let grade = randomGrade();\n"
+                "                while(grade > 0 && (!talentList[grade] || talentList[grade].length === 0)) grade--;\n"
+                "                if(!talentList[grade] || talentList[grade].length === 0) return null; // 卡池已耗尽，跳过而不是抛异常卡死\n"
+                "                const length = talentList[grade].length;\n\n"
+                "                const random = Math.floor(Math.random()*length) % length;\n"
+                "                return talentList[grade].splice(random,1)[0];\n"
+                "            });\n"
+                "        return pool.filter(Boolean);",
+                "guard talentRandom pool exhaustion")
+
+          # ------------------------------------------------------------------
+          # 7. [BUGFIX] Talent.replace(): 给天赋替换递归加最大深度保护
+          #    talentSelectLimit 提高后持有天赋数量变多，replace() 是无深度
+          #    限制的递归，天赋多/替换链长时可能导致长时间卡顿甚至栈溢出。
+          # ------------------------------------------------------------------
+          patch("src/src/modules/talent.js",
+                "        const wr = this.#system.function(this.#system.Function.UTIL).weightRandom;\n"
+                "        const replace = (talent, talents) => {\n"
+                "            const replaceList = getReplaceList(talent, talents);\n"
+                "            if(!replaceList) return talent;\n"
+                "            const rand = wr(replaceList);\n"
+                "            return replace(\n"
+                "                rand, talents.concat(rand)\n"
+                "            );\n"
+                "        }",
+                "        const wr = this.#system.function(this.#system.Function.UTIL).weightRandom;\n"
+                "        const MAX_REPLACE_DEPTH = 64; // 安全上限，防止替换链过长导致卡顿/卡死\n"
+                "        const replace = (talent, talents, depth = 0) => {\n"
+                "            if(depth >= MAX_REPLACE_DEPTH) return talent;\n"
+                "            const replaceList = getReplaceList(talent, talents);\n"
+                "            if(!replaceList) return talent;\n"
+                "            const rand = wr(replaceList);\n"
+                "            return replace(\n"
+                "                rand, talents.concat(rand), depth + 1\n"
+                "            );\n"
+                "        }",
+                "cap talent replace recursion depth")
+
+          # ------------------------------------------------------------------
+          # 8. [BUGFIX] Life.doEvent(): 把递归改成带上限的循环
+          #    高龄段（接近数据上限第500岁）存在"寿元终(40041)->你死了(10000)
+          #    ->复活分支"这类连锁 next 事件，doEvent 原本是无限制递归，
+          #    连锁过长/异常时会一直卡住甚至栈溢出。改为带跳数上限的循环，
+          #    正常游戏体验完全不变，但不会再无限卡住。
+          # ------------------------------------------------------------------
+          patch("src/src/modules/life.js",
+                "    doEvent(eventId) {\n"
+                "        const { effect, next, description, postEvent, grade } = this.#event.do(eventId);\n"
+                "        this.#property.change(this.PropertyTypes.EVT, eventId);\n"
+                "        this.#property.effect(effect);\n"
+                "        const content = {\n"
+                "            type: this.PropertyTypes.EVT,\n"
+                "            description,\n"
+                "            postEvent,\n"
+                "            grade,\n"
+                "        }\n"
+                "        if(next) return [content, this.doEvent(next)].flat();\n"
+                "        return [content];\n"
+                "    }",
+                "    doEvent(eventId) {\n"
+                "        const contents = [];\n"
+                "        const MAX_CHAIN = 100; // 安全上限，防止连锁 next 事件卡死（例如高龄段的寿元/复活链）\n"
+                "        let hops = 0;\n"
+                "        while(eventId != null && hops++ < MAX_CHAIN) {\n"
+                "            const { effect, next, description, postEvent, grade } = this.#event.do(eventId);\n"
+                "            this.#property.change(this.PropertyTypes.EVT, eventId);\n"
+                "            this.#property.effect(effect);\n"
+                "            contents.push({\n"
+                "                type: this.PropertyTypes.EVT,\n"
+                "                description,\n"
+                "                postEvent,\n"
+                "                grade,\n"
+                "            });\n"
+                "            eventId = next;\n"
+                "        }\n"
+                "        return contents;\n"
+                "    }",
+                "convert doEvent recursion to bounded loop")
 
           print("all patches applied")
           PY
