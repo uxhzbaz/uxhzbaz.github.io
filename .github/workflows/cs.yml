@@ -1,4 +1,4 @@
-name: Build LifeRestart (Enhanced) Single-file
+name: Build LifeRestart (Enhanced)
 
 on:
   workflow_dispatch:
@@ -29,7 +29,6 @@ jobs:
       - name: Patch STR<0 no longer causes death
         run: |
           python3 - <<'PY'
-          import re
           path = "src/src/modules/property.js"
           s = open(path, encoding="utf-8").read()
           old = "    isEnd() {\n        return this.get(this.TYPES.LIF) < 1;\n    }"
@@ -37,9 +36,8 @@ jobs:
                  "        if (this.get(this.TYPES.STR) < 0) return false; // 体质<0不会死，更折磨\n"
                  "        return this.get(this.TYPES.LIF) < 1;\n"
                  "    }")
-          assert old in s, "isEnd() pattern not found, source layout may have changed"
-          s = s.replace(old, new)
-          open(path, "w", encoding="utf-8").write(s)
+          assert old in s, "isEnd() pattern not found"
+          open(path, "w", encoding="utf-8").write(s.replace(old, new))
           PY
 
       - name: Install deps
@@ -49,126 +47,13 @@ jobs:
       - name: Generate JSON from xlsx data
         working-directory: src
         run: npm run xlsx2json
-      - name: Disable code-splitting so no runtime dynamic import() remains
-        run: |
-          cat > src/vite.config.js <<'EOF'
-          /** @type {import('vite').UserConfig} */
-          export default {
-              base: './',
-              build: {
-                  outDir: 'template/public',
-                  cssCodeSplit: false,
-                  rollupOptions: {
-                      output: {
-                          inlineDynamicImports: true,
-                      },
-                  },
-              },
-          }
-          EOF
+
       - name: Build
         working-directory: src
-        run: npm run build   # outputs to src/template/public per vite.config.js
+        run: npm run build   # outputs to src/template/public
 
-      - name: Pack into single HTML file
-        run: |
-          cat > pack.mjs <<'EOF'
-          import fs from 'fs';
-          import path from 'path';
-
-          const distDir = 'src/template/public';
-          const indexPath = path.join(distDir, 'index.html');
-          let html = fs.readFileSync(indexPath, 'utf-8');
-
-          const mime = f => {
-            const ext = path.extname(f).toLowerCase();
-            const m = {
-              '.js':'application/javascript', '.css':'text/css',
-              '.json':'application/json', '.png':'image/png',
-              '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif',
-              '.webp':'image/webp', '.svg':'image/svg+xml',
-              '.woff':'font/woff', '.woff2':'font/woff2', '.ttf':'font/ttf',
-              '.mp3':'audio/mpeg', '.ogg':'audio/ogg', '.wav':'audio/wav',
-              '.ico':'image/x-icon', '.atlas':'text/plain'
-            };
-            return m[ext] || 'application/octet-stream';
-          };
-
-          const assets = {};
-          function walk(dir) {
-            for (const name of fs.readdirSync(dir)) {
-              const full = path.join(dir, name);
-              const stat = fs.statSync(full);
-              if (stat.isDirectory()) { walk(full); continue; }
-              const rel = path.relative(distDir, full).split(path.sep).join('/');
-              if (full === indexPath) continue;
-              const buf = fs.readFileSync(full);
-              assets[rel] = `data:${mime(full)};base64,${buf.toString('base64')}`;
-            }
-          }
-          walk(distDir);
-
-          // 内联 index.html 里直接引用的 <script src> / <link href>，其余作为虚拟FS注入
-          html = html.replace(/<script[^>]+src="([^"]+)"[^>]*><\/script>/g, (m, src) => {
-            const rel = src.replace(/^\.?\//, '');
-            if (assets[rel]) {
-              const b64 = assets[rel].split(',')[1];
-              const code = Buffer.from(b64, 'base64').toString('utf-8');
-              delete assets[rel];
-              return `<script>${code}</script>`;
-            }
-            return m;
-          });
-          html = html.replace(/<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"[^>]*>/g, (m, href) => {
-            const rel = href.replace(/^\.?\//, '');
-            if (assets[rel]) {
-              const b64 = assets[rel].split(',')[1];
-              const code = Buffer.from(b64, 'base64').toString('utf-8');
-              delete assets[rel];
-              return `<style>${code}</style>`;
-            }
-            return m;
-          });
-
-          const interceptor = `
-          <script>
-          window.__ASSETS__ = ${JSON.stringify(assets)};
-          (function(){
-            function resolve(url) {
-              if (typeof url !== 'string') return null;
-              let u = url.split('?')[0].replace(/^\\.\\//, '').replace(/^\\//, '');
-              if (window.__ASSETS__[u]) return window.__ASSETS__[u];
-              const base = u.split('/').pop();
-              const found = Object.keys(window.__ASSETS__).find(k => k.endsWith('/' + base) || k === base);
-              return found ? window.__ASSETS__[found] : null;
-            }
-            const origFetch = window.fetch.bind(window);
-            window.fetch = function(input, init) {
-              const url = typeof input === 'string' ? input : input.url;
-              const hit = resolve(url);
-              return hit ? origFetch(hit, init) : origFetch(input, init);
-            };
-            const origOpen = XMLHttpRequest.prototype.open;
-            XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-              const hit = resolve(url);
-              return origOpen.call(this, method, hit || url, ...rest);
-            };
-            const imgDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
-            Object.defineProperty(HTMLImageElement.prototype, 'src', {
-              set(v) { const hit = resolve(v); imgDesc.set.call(this, hit || v); },
-              get() { return imgDesc.get.call(this); }
-            });
-          })();
-          </script>`;
-          html = html.replace('</head>', interceptor + '</head>');
-
-          fs.writeFileSync('lifeRestart-enhanced.html', html);
-          console.log('Packed size:', (fs.statSync('lifeRestart-enhanced.html').size / 1024 / 1024).toFixed(2), 'MB');
-          EOF
-          node pack.mjs
-
-      - name: Upload artifact
+      - name: Upload build output
         uses: actions/upload-artifact@v4
         with:
-          name: lifeRestart-enhanced-single-html
-          path: lifeRestart-enhanced.html
+          name: lifeRestart-enhanced
+          path: src/template/public
