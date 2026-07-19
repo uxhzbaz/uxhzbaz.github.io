@@ -18,26 +18,74 @@ jobs:
         with:
           node-version: 20
 
-      - name: Patch talent draw count (10 -> 100)
-        run: |
-          sed -i 's/talentPullCount: 10, \/\/ number of talents to pull from the talent pool/talentPullCount: 100, \/\/ number of talents to pull from the talent pool/' src/src/index.js
-
-      - name: Patch talent select limit (3 -> 30)
-        run: |
-          sed -i 's/talentSelectLimit: 3, \/\/ max number of talents that can be selected/talentSelectLimit: 30, \/\/ max number of talents that can be selected/' src/src/index.js
-
-      - name: Patch STR<0 no longer causes death
+      - name: Apply gameplay patches
         run: |
           python3 - <<'PY'
-          path = "src/src/modules/property.js"
-          s = open(path, encoding="utf-8").read()
-          old = "    isEnd() {\n        return this.get(this.TYPES.LIF) < 1;\n    }"
-          new = ("    isEnd() {\n"
-                 "        if (this.get(this.TYPES.STR) < 0) return false; // 体质<0不会死，更折磨\n"
-                 "        return this.get(this.TYPES.LIF) < 1;\n"
-                 "    }")
-          assert old in s, "isEnd() pattern not found"
-          open(path, "w", encoding="utf-8").write(s.replace(old, new))
+          def patch(path, old, new, desc):
+              s = open(path, encoding="utf-8").read()
+              assert old in s, f"pattern not found for [{desc}] in {path}"
+              open(path, "w", encoding="utf-8").write(s.replace(old, new, 1))
+
+          # 1. 天赋抽卡数量 10 -> 1000
+          patch("src/src/index.js",
+                "talentPullCount: 10, // number of talents to pull from the talent pool",
+                "talentPullCount: 1000, // number of talents to pull from the talent pool",
+                "talentPullCount")
+
+          # 2. 提高好词条(2/3档)出现概率
+          patch("src/src/index.js",
+                "talentRate: { 1:100, 2:10, 3:1, total: 1000 }, // rate of talent pull",
+                "talentRate: { 1:300, 2:500, 3:500, total: 1000 }, // rate of talent pull（提高优质词条概率）",
+                "talentRate")
+
+          # 3. 天赋选择数量不限制
+          patch("src/src/index.js",
+                "talentSelectLimit: 3, // max number of talents that can be selected",
+                "talentSelectLimit: Infinity, // max number of talents that can be selected（不限制数量）",
+                "talentSelectLimit")
+
+          # 4. 体质低时不会意外死亡（拦截死亡事件本身，而不是猜阈值）
+          patch("src/src/modules/life.js",
+                "        this.#property.change(this.PropertyTypes.EVT, eventId);\n        this.#property.effect(effect);\n",
+                "        this.#property.change(this.PropertyTypes.EVT, eventId);\n        if(eventId !== 10000) this.#property.effect(effect); // 体质低时不会意外死亡，更折磨\n",
+                "doEvent skip death effect")
+
+          # 5. 天赋列表按品质从高到低排序 + 取消次数限制的按钮逻辑（default / cyber 两套主题）
+          for f in ["src/src/ui/themes/default/talent.js", "src/src/ui/themes/cyber/talent.js"]:
+              patch(f,
+                    "this.listTalents.array = core.talentRandom();",
+                    "this.listTalents.array = core.talentRandom().sort((a, b) => b.grade - a.grade);",
+                    f"sort talents in {f}")
+
+              patch(f,
+                    "        if(this.#selected.size < core.talentSelectLimit) {\n"
+                    "            return $$event('message', ['F_TalentSelectNotComplect', core.talentSelectLimit]);\n"
+                    "        }\n\n",
+                    "",
+                    f"remove select-count gate in {f}")
+
+              patch(f,
+                    "this.btnNext.label = 'UI_Talent_Select_Uncomplete';",
+                    "this.btnNext.label = 'UI_Next';",
+                    f"init label in {f}")
+
+          patch("src/src/ui/themes/default/talent.js",
+                "            this.btnNext.label = this.#selected.size === core.talentSelectLimit\n"
+                "                ? 'UI_Next'\n"
+                "                : 'UI_Talent_Select_Uncomplete';\n\n"
+                "            changeStyle();",
+                "            changeStyle();",
+                "default per-click label")
+
+          patch("src/src/ui/themes/cyber/talent.js",
+                "            this.btnNext.label = this.#selected.size === core.talentSelectLimit\n"
+                "                ? 'UI_Next'\n"
+                "                : 'UI_Talent_Select_Uncomplete';\n"
+                "            unselected.visible = !( selected.visible = this.#selected.has(index) );",
+                "            unselected.visible = !( selected.visible = this.#selected.has(index) );",
+                "cyber per-click label")
+
+          print("all patches applied")
           PY
 
       - name: Install deps
