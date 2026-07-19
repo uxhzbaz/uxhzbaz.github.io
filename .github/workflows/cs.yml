@@ -26,16 +26,16 @@ jobs:
               assert old in s, f"pattern not found for [{desc}] in {path}"
               open(path, "w", encoding="utf-8").write(s.replace(old, new, 1))
 
-          # 1. 天赋抽卡数量 10 -> 100
+          # 1. 天赋抽卡数量 10 -> 300
           patch("src/src/index.js",
                 "talentPullCount: 10, // number of talents to pull from the talent pool",
-                "talentPullCount: 100, // number of talents to pull from the talent pool",
+                "talentPullCount: 300, // number of talents to pull from the talent pool",
                 "talentPullCount")
 
           # 2. 提高好词条(2/3档)出现概率
           patch("src/src/index.js",
                 "talentRate: { 1:100, 2:10, 3:1, total: 1000 }, // rate of talent pull",
-                "talentRate: { 1:1, 2:30, 3:100, total: 1000 }, // rate of talent pull（提高优质词条概率）",
+                "talentRate: { 1:100, 2:100, 3:100, total: 1000 }, // rate of talent pull（提高优质词条概率）",
                 "talentRate")
 
           # 3. 天赋选择数量不限制
@@ -43,12 +43,6 @@ jobs:
                 "talentSelectLimit: 3, // max number of talents that can be selected",
                 "talentSelectLimit: Infinity, // max number of talents that can be selected（不限制数量）",
                 "talentSelectLimit")
-
-          # 4. 体质低时不会意外死亡（拦截死亡事件本身，而不是猜阈值）
-          patch("src/src/modules/life.js",
-                "        this.#property.change(this.PropertyTypes.EVT, eventId);\n        this.#property.effect(effect);\n",
-                "        this.#property.change(this.PropertyTypes.EVT, eventId);\n        if(eventId !== 10000) this.#property.effect(effect); // 体质低时不会意外死亡，更折磨\n",
-                "doEvent skip death effect")
 
           # 5. 天赋列表按品质从高到低排序 + 取消次数限制的按钮逻辑（default / cyber 两套主题）
           for f in ["src/src/ui/themes/default/talent.js", "src/src/ui/themes/cyber/talent.js"]:
