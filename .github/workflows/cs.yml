@@ -49,7 +49,23 @@ jobs:
       - name: Generate JSON from xlsx data
         working-directory: src
         run: npm run xlsx2json
-
+      - name: Disable code-splitting so no runtime dynamic import() remains
+        run: |
+          cat > src/vite.config.js <<'EOF'
+          /** @type {import('vite').UserConfig} */
+          export default {
+              base: './',
+              build: {
+                  outDir: 'template/public',
+                  cssCodeSplit: false,
+                  rollupOptions: {
+                      output: {
+                          inlineDynamicImports: true,
+                      },
+                  },
+              },
+          }
+          EOF
       - name: Build
         working-directory: src
         run: npm run build   # outputs to src/template/public per vite.config.js
