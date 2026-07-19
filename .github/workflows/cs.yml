@@ -26,16 +26,16 @@ jobs:
               assert old in s, f"pattern not found for [{desc}] in {path}"
               open(path, "w", encoding="utf-8").write(s.replace(old, new, 1))
 
-          # 1. 天赋抽卡数量 10 -> 1000
+          # 1. 天赋抽卡数量 10 -> 100
           patch("src/src/index.js",
                 "talentPullCount: 10, // number of talents to pull from the talent pool",
-                "talentPullCount: 1000, // number of talents to pull from the talent pool",
+                "talentPullCount: 100, // number of talents to pull from the talent pool",
                 "talentPullCount")
 
           # 2. 提高好词条(2/3档)出现概率
           patch("src/src/index.js",
                 "talentRate: { 1:100, 2:10, 3:1, total: 1000 }, // rate of talent pull",
-                "talentRate: { 1:300, 2:500, 3:500, total: 1000 }, // rate of talent pull（提高优质词条概率）",
+                "talentRate: { 1:1, 2:30, 3:100, total: 1000 }, // rate of talent pull（提高优质词条概率）",
                 "talentRate")
 
           # 3. 天赋选择数量不限制
