@@ -26,12 +26,9 @@ jobs:
               assert old in s, f"pattern not found for [{desc}] in {path}"
               open(path, "w", encoding="utf-8").write(s.replace(old, new, 1))
 
-          # ------------------------------------------------------------------
-          # 1. 天赋抽卡数量 10 -> 130
-          # ------------------------------------------------------------------
           patch("src/src/index.js",
                 "talentPullCount: 10, // number of talents to pull from the talent pool",
-                "talentPullCount: 130, // number of talents to pull from the talent pool（原300会耗尽148个非排他天赋池，导致卡死，改为100）",
+                "talentPullCount: 130,",
                 "talentPullCount")
 
           # 2. 提高好词条(2/3档)出现概率
@@ -45,13 +42,30 @@ jobs:
           #    (Infinity 会让本来只处理"最多3个天赋"的每回合逻辑
           #     (doTalent 遍历 / 天赋替换递归 talentReplace) 变成要处理上百个，
           #     其中天赋替换 Talent.replace() 是无深度限制的递归，天赋越多递归
-          #     越深；这被怀疑是"499岁卡死"的根因之一。设为有限值130，
+          #     越深；这被怀疑是"499岁卡死"的根因之一。设为有限值100，
           #     依然可以"全选"，但不再是无界的)
           # ------------------------------------------------------------------
           patch("src/src/index.js",
                 "talentSelectLimit: 3, // max number of talents that can be selected",
-                "talentSelectLimit: 130, // max number of talents that can be selected（不设 Infinity，改为与talentPullCount一致的有限值，避免无界递归卡死）",
+                "talentSelectLimit: 100, // max number of talents that can be selected（不设 Infinity，改为与talentPullCount一致的有限值，避免无界递归卡死）",
                 "talentSelectLimit")
+
+          # ------------------------------------------------------------------
+          # 4. [新功能] 删除单项属性10点上限，并允许分配负数属性点
+          #    propertyAllocateLimit 是每一项属性（颜值/智力/体质/家境）
+          #    在开局分配时的 [下限, 上限]。原来是 [0, 10]：不能选负数、
+          #    单项最多10点。改成 [-9999, 9999] 后：
+          #      - 上限不再是10，最多可以单项分配到9999
+          #      - 允许分配负数，比如把智力设为 -9999，总分配点数(total)
+          #        会相应减少9999，从而让"剩余可分配点数"增加9999，
+          #        可以拿去点满其他属性（这部分计算逻辑
+          #        ui/themes/*/property.js 里已经是通用的，不需要额外改动，
+          #        只改这一个配置数字即可生效，default/cyber 两套主题共用）
+          # ------------------------------------------------------------------
+          patch("src/src/index.js",
+                "    propertyAllocateLimit: [0, 10], // scoop of properties that can be allocated,",
+                "    propertyAllocateLimit: [-9999, 9999], // 删除10点上限 + 允许负数属性点（腾出对应点数分配给其他属性）",
+                "propertyAllocateLimit")
 
           # 5. 天赋列表按品质从高到低排序 + 取消次数限制的按钮逻辑（default / cyber 两套主题）
           for f in ["src/src/ui/themes/default/talent.js", "src/src/ui/themes/cyber/talent.js"]:
@@ -144,14 +158,6 @@ jobs:
                 "            );\n"
                 "        }",
                 "cap talent replace recursion depth")
-
-          # ------------------------------------------------------------------
-          # 8. [BUGFIX] Life.doEvent(): 把递归改成带上限的循环
-          #    高龄段（接近数据上限第500岁）存在"寿元终(40041)->你死了(10000)
-          #    ->复活分支"这类连锁 next 事件，doEvent 原本是无限制递归，
-          #    连锁过长/异常时会一直卡住甚至栈溢出。改为带跳数上限的循环，
-          #    正常游戏体验完全不变，但不会再无限卡住。
-          # ------------------------------------------------------------------
           patch("src/src/modules/life.js",
                 "    doEvent(eventId) {\n"
                 "        const { effect, next, description, postEvent, grade } = this.#event.do(eventId);\n"
@@ -185,6 +191,26 @@ jobs:
                 "        return contents;\n"
                 "    }",
                 "convert doEvent recursion to bounded loop")
+          patch("src/src/modules/property.js",
+                "    ageNext() {\n"
+                "        this.change(this.TYPES.AGE, 1);\n"
+                "        const age = this.get(this.TYPES.AGE);\n"
+                "        const {event, talent} = this.getAgeData(age);\n"
+                "        return {age, event, talent};\n"
+                "    }",
+                "    ageNext() {\n"
+                "        this.change(this.TYPES.AGE, 1);\n"
+                "        const age = this.get(this.TYPES.AGE);\n"
+                "        const data = this.getAgeData(age);\n"
+                "        if(!data) {\n"
+                "            // 超过数据中定义的最大年龄，寿元耗尽，直接结束本局而不是崩溃\n"
+                "            this.set(this.TYPES.LIF, 0);\n"
+                "            return {age, event: [], talent: []};\n"
+                "        }\n"
+                "        const {event, talent} = data;\n"
+                "        return {age, event, talent};\n"
+                "    }",
+                "ageNext data-ceiling guard")
 
           print("all patches applied")
           PY
