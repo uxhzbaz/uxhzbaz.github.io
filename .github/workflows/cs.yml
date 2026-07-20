@@ -39,11 +39,10 @@ jobs:
 
           # ------------------------------------------------------------------
           # 3. 天赋选择数量：不再设为 Infinity，改为与抽取数量一致的有限值（100）
-          #    (Infinity 会让本来只处理"最多3个天赋"的每回合逻辑
-          #     (doTalent 遍历 / 天赋替换递归 talentReplace) 变成要处理上百个，
-          #     其中天赋替换 Talent.replace() 是无深度限制的递归，天赋越多递归
-          #     越深；这被怀疑是"499岁卡死"的根因之一。设为有限值100，
-          #     依然可以"全选"，但不再是无界的)
+          #    (Infinity 会让本来只处理"最多3个天赋"的每回合逻辑变成要处理
+          #     上百个，其中天赋替换 Talent.replace() 是无深度限制的递归，
+          #     天赋越多递归越深；这被怀疑是"499岁卡死"的根因之一。设为
+          #     有限值100，依然可以"全选"，但不再是无界的)
           # ------------------------------------------------------------------
           patch("src/src/index.js",
                 "talentSelectLimit: 3, // max number of talents that can be selected",
@@ -51,21 +50,40 @@ jobs:
                 "talentSelectLimit")
 
           # ------------------------------------------------------------------
-          # 4. [新功能] 删除单项属性10点上限，并允许分配负数属性点
+          # 4. 删除单项属性10点上限，并允许分配负数属性点
           #    propertyAllocateLimit 是每一项属性（颜值/智力/体质/家境）
-          #    在开局分配时的 [下限, 上限]。原来是 [0, 10]：不能选负数、
-          #    单项最多10点。改成 [-9999, 9999] 后：
-          #      - 上限不再是10，最多可以单项分配到9999
-          #      - 允许分配负数，比如把智力设为 -9999，总分配点数(total)
-          #        会相应减少9999，从而让"剩余可分配点数"增加9999，
-          #        可以拿去点满其他属性（这部分计算逻辑
-          #        ui/themes/*/property.js 里已经是通用的，不需要额外改动，
-          #        只改这一个配置数字即可生效，default/cyber 两套主题共用）
+          #    在开局分配时的 [下限, 上限]。原来是 [0, 10]。改成
+          #    [-9999, 9999] 后单项上限不再是10，也允许负数腾出点数。
+          #    (default/cyber 两套主题共用这一个配置数字)
           # ------------------------------------------------------------------
           patch("src/src/index.js",
                 "    propertyAllocateLimit: [0, 10], // scoop of properties that can be allocated,",
                 "    propertyAllocateLimit: [-9999, 9999], // 删除10点上限 + 允许负数属性点（腾出对应点数分配给其他属性）",
                 "propertyAllocateLimit")
+
+          # ------------------------------------------------------------------
+          # 4b. [新功能] 无限可分配属性点
+          #    a) defaultPropertyPoints 从 20 调到一个极大值，配合上面的
+          #       propertyAllocateLimit，单项属性也能分配到很高的值。
+          #    b) 去掉 default / cyber 两套主题里"必须把点数刚好分配完
+          #       才能进入下一步"的限制（原来 left > 0 就会弹提示不让继续），
+          #       允许不精确花完也能继续。
+          #    两者叠加，相当于可分配点数不再有实际上限。
+          # ------------------------------------------------------------------
+          patch("src/src/index.js",
+                "    defaultPropertyPoints: 20, // default number of points for a property",
+                "    defaultPropertyPoints: 999999, // 无限可分配属性点",
+                "defaultPropertyPoints")
+
+          for f in ["src/src/ui/themes/default/property.js", "src/src/ui/themes/cyber/property.js"]:
+              patch(f,
+                    "    next() {\n"
+                    "        const left = this.#propertyPoints - this.total;\n"
+                    "        if (left > 0) {\n"
+                    "            return $$event('message', ['F_PropertyPointLeft', left]);\n"
+                    "        }\n",
+                    "    next() {\n",
+                    f"remove must-spend-all-points gate in {f}")
 
           # 5. 天赋列表按品质从高到低排序 + 取消次数限制的按钮逻辑（default / cyber 两套主题）
           for f in ["src/src/ui/themes/default/talent.js", "src/src/ui/themes/cyber/talent.js"]:
