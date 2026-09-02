@@ -1,237 +1,550 @@
 name: build cross-compile tools
+
 run-name: ${{ github.event.inputs.run_name || format('{0}-{1}', github.event.inputs.tool_name, github.event.inputs.tool_version) }}
+
 on:
   workflow_dispatch:
     inputs:
+
       run_name:
-        description: '工作流运行名称'
+        description: 工作流名称
         default: ''
         required: false
+
       tool_name:
-        description: '工具名称 (例如: xz, make, tar)'
-        default: 'xz'
+        description: 工具名称
+        default: mscp
         required: true
+
       tool_version:
-        description: '工具版本 (用于打包命名，例如: 5.8.3)'
-        default: '5.8.3'
+        description: 版本
+        default: 0.2.4
         required: true
+
       source_url:
-        description: '源码包URL (.tar.gz / .tar.xz / .zip 等)'
-        default: 'https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.xz'
+        description: 源码地址
+        default: https://github.com/upa/mscp/releases/download/v0.2.4/mscp-0.2.4.tar.gz
         required: true
+
       targets:
-        description: '目标三元组，逗号分隔 (需要与工具链前缀一致)'
-        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
+        description: 目标架构
+        default: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi
         required: true
-      build_command:
-        description: '自定义完整编译命令 (在 src 目录下执行，可使用 $TC, $INST 等环境变量)'
-        default: |
-          ./configure --host="${TC}" --prefix=/usr --disable-dependency-tracking --disable-shared --enable-static LDFLAGS="-static"
-          make -j$(nproc) LDFLAGS="-all-static"
-          make install DESTDIR="${INST}"
-        required: true
+
 
 env:
-  TOOLCHAIN_TAG: '2026-06-30-14-51'
-  TOOLCHAIN_BASE: 'https://github.com/uxhzbaz/musl-cross/releases/download/2026-06-30-14-51'
+
+  TOOLCHAIN_TAG: 2026-06-30-14-51
+
+  TOOLCHAIN_BASE:
+    https://github.com/uxhzbaz/musl-cross/releases/download/2026-06-30-14-51
+
 
 jobs:
-  s:
-    name: 解析参数
+
+  prepare:
+
+    name: prepare dependencies
+
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.p.outputs.matrix }}
-      first_key: ${{ steps.p.outputs.first_key }}
+
+
     steps:
-      - id: p
-        shell: bash
-        env:
-          TARGETS: ${{ github.event.inputs.targets }}
-        run: |
-          include='[]'
-          first_key=''
-          IFS=',' read -ra TS <<< "$TARGETS"
-          for t in "${TS[@]}"; do
-            t="${t# }"; t="${t% }"
-            if [[ -z "$t" ]]; then continue; fi
 
-            tc_triple="$t"
-            tc_url="${TOOLCHAIN_BASE}/${tc_triple}.tar.xz"
 
-            include=$(jq \
-              --arg t "$t" --arg tc_triple "$tc_triple" --arg tc_url "$tc_url" \
-              '. += [{"t":$t,"tc_triple":$tc_triple,"tc_url":$tc_url}]' \
-              <<< "$include")
-            [[ -z "$first_key" ]] && first_key="$t"
-          done
-          echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
-          echo "first_key=$first_key" >> $GITHUB_OUTPUT
+    - name: 下载 zlib openssl
+
+      run: |
+
+        mkdir deps
+
+
+        curl \
+        --retry 5 \
+        --retry-all-errors \
+        -fL \
+        https://zlib.net/fossils/zlib-1.3.1.tar.gz \
+        -o deps/zlib.tar.gz
+
+
+
+        curl \
+        --retry 5 \
+        --retry-all-errors \
+        -fL \
+        https://github.com/openssl/openssl/releases/download/openssl-3.3.2/openssl-3.3.2.tar.gz \
+        -o deps/openssl.tar.gz
+
+
+
+        file deps/*
+
+
+
+    - name: 上传公共源码
+
+      uses: actions/upload-artifact@v4
+
+      with:
+
+        name: common-deps
+
+        path: deps
+
+
+
+##################################################
+# 解析 matrix
+##################################################
+
+
+  parse:
+
+
+    name: parse targets
+
+    runs-on: ubuntu-latest
+
+
+    outputs:
+
+      matrix: ${{ steps.out.outputs.matrix }}
+
+
+
+    steps:
+
+
+    - id: out
+
+      env:
+
+        TARGETS: ${{ github.event.inputs.targets }}
+
+
+      run: |
+
+
+        arr='[]'
+
+
+        IFS=',' read -ra list <<< "$TARGETS"
+
+
+        for t in "${list[@]}"
+
+        do
+
+          arr=$(jq \
+          --arg t "$t" \
+          '. += [{"target":$t}]' \
+          <<< "$arr")
+
+
+        done
+
+
+
+        echo "matrix=$(jq -c '{include:.}' <<< "$arr")" >> $GITHUB_OUTPUT
+
+
+
+
+
+##################################################
+# 编译
+##################################################
+
 
   build:
-    needs: s
-    name: ${{ matrix.t }}
-    runs-on: ubuntu-latest
+
+
+    needs:
+
+      - prepare
+
+      - parse
+
+
+
     strategy:
+
       fail-fast: false
-      matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
+
+      matrix:
+
+        ${{ fromJSON(needs.parse.outputs.matrix) }}
+
+
+
+    runs-on: ubuntu-latest
+
+
+
+    name: build ${{ matrix.target }}
+
+
+
     steps:
-      - name: 安装构建依赖
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: gettext
-          version: 1.0
 
-      - name: 缓存工具链
-        id: cache-tc
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/toolchain
-          key: musl-toolchain-${{ matrix.tc_triple }}-${{ env.TOOLCHAIN_TAG }}
 
-      - name: 下载并解压工具链
-        if: steps.cache-tc.outputs.cache-hit != 'true'
-        run: |
-          echo "下载地址: ${{ matrix.tc_url }}"
-          curl -v -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.tar.xz
-          mkdir -p "${{ github.workspace }}/toolchain"
-          tar -xf toolchain.tar.xz -C "${{ github.workspace }}/toolchain" --strip-components=1
-          rm -f toolchain.tar.xz
 
-      - name: 下载并解压源码
-        run: |
-          URL="${{ github.event.inputs.source_url }}"
-          curl -fsSL --retry 3 --retry-delay 5 "$URL" -o src_archive
-          mkdir -p src
-          if file src_archive | grep -q 'Zip archive'; then
-            unzip -q src_archive -d src_tmp
-            mv src_tmp/*/* src/ || mv src_tmp/* src/
-          else
-            tar -xf src_archive -C src --strip-components=1
-          fi
+    - name: 安装依赖
 
-      - name: 编译并安装
-        run: |
-          export TC="${{ matrix.tc_triple }}"
-          export INST="${{ github.workspace }}/install"
-          export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
-          export CC="${TC}-gcc"
-          export CXX="${TC}-g++"
-          export AR="${TC}-ar"
-          export RANLIB="${TC}-ranlib"
-          export STRIP="${TC}-strip"
-          export CFLAGS="-Os"
-          export PKG_CONFIG="false"
-          export MSGFMT="$(which msgfmt)"
-          export MSGMERGE="$(which msgmerge)"
-          export XGETTEXT="$(which xgettext)"
+      uses: awalsh128/cache-apt-pkgs-action@latest
 
-          mkdir -p "$INST"
-          cd src
+      with:
 
-          ${{ github.event.inputs.build_command }}
+        packages: cmake gettext
 
-      - name: 收集产物
-        run: |
-          TARGET="${{ matrix.t }}"
-          TC="${{ matrix.tc_triple }}"
-          INST="${{ github.workspace }}/install"
-          STRIP_BIN="${{ github.workspace }}/toolchain/bin/${TC}-strip"
-          mkdir -p dist
+        version: 1.0
 
-          # ELF 可执行二进制
-          while IFS= read -r -d '' f; do
-            file "$f" | grep -qE 'ELF.*executable' || continue
-            fname=$(basename "$f")
-            "$STRIP_BIN" "$f" 2>/dev/null || true
-            cp "$f" "dist/${fname}"
-          done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
 
-          # shell 脚本
-          while IFS= read -r -d '' f; do
-            file "$f" | grep -qiE 'shell script|text' || continue
-            fname=$(basename "$f")
-            cp "$f" "dist/${fname}"
-          done < <(find "${INST}/usr/bin" -maxdepth 1 -type f -print0 2>/dev/null)
 
-          echo "产物列表:"
-          find dist -type f | sort
+    ############################################
+    # 工具链
+    ############################################
 
-      - name: 验证静态链接
-        run: |
-          fail=0
-          while IFS= read -r -d '' f; do
-            file "$f" | grep -qE 'ELF.*executable' || continue
-            if ! file "$f" | grep -q "statically linked"; then
-              echo "::error::$f 未静态链接: $(file "$f")"
-              fail=1
-            else
-              echo "OK: $(basename "$f") - statically linked"
-            fi
-          done < <(find dist -maxdepth 1 -type f -print0)
-          [[ $fail -eq 0 ]] || exit 1
 
-      - name: 打包产物
-        run: |
-          TARGET="${{ matrix.t }}"
-          TOOL_NAME="${{ github.event.inputs.tool_name }}"
-          TOOL_VERSION="${{ github.event.inputs.tool_version }}"
-          PKG_NAME="${TOOL_NAME}-${TOOL_VERSION}-${TARGET}"
+    - name: 缓存工具链
 
-          tar -cJf "${PKG_NAME}.tar.xz" -C dist .
-          echo "$(sha256sum "${PKG_NAME}.tar.xz" | awk '{print $1}')" > "${PKG_NAME}.tar.xz.sha256.txt"
 
-          echo "打包完毕: ${PKG_NAME}.tar.xz ($(ls -lh "${PKG_NAME}.tar.xz" | awk '{print $5}'))"
+      uses: actions/cache@v4
 
-      - name: 上传产物至 Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}-${{ matrix.t }}
-          path: |
-            *.tar.xz
-            *.sha256.txt
+
+      with:
+
+        path: toolchain
+
+        key:
+          musl-${{ matrix.target }}-${{ env.TOOLCHAIN_TAG }}
+
+
+
+    - name: 下载工具链
+
+
+      if: steps.cache.outputs.cache-hit != 'true'
+
+
+      run: |
+
+
+        mkdir toolchain
+
+
+        curl \
+        --retry 5 \
+        -fL \
+        "${TOOLCHAIN_BASE}/${{matrix.target}}.tar.xz" \
+        -o tc.tar.xz
+
+
+
+        tar xf tc.tar.xz \
+        -C toolchain \
+        --strip-components=1
+
+
+
+
+
+    ############################################
+    # 公共源码
+    ############################################
+
+
+    - name: 下载公共源码
+
+
+      uses: actions/download-artifact@v4
+
+
+      with:
+
+        name: common-deps
+
+        path: deps
+
+
+
+
+
+    ############################################
+    # 源码
+    ############################################
+
+
+    - name: 下载工具源码
+
+
+      run: |
+
+
+        curl \
+        --retry 5 \
+        -fL \
+        "${{github.event.inputs.source_url}}" \
+        -o src.tar
+
+
+
+        mkdir src
+
+
+        tar xf src.tar \
+        -C src \
+        --strip-components=1
+    - name: Build
+
+
+      shell: bash
+
+
+      run: |
+
+
+        set -e
+
+
+
+        export TC="${{matrix.target}}"
+
+
+        export INST="$PWD/install"
+
+
+        export PATH="$PWD/toolchain/bin:$PATH"
+
+
+
+        export CC="${TC}-gcc"
+
+        export CXX="${TC}-g++"
+
+        export AR="${TC}-ar"
+
+        export RANLIB="${TC}-ranlib"
+
+        export STRIP="${TC}-strip"
+
+
+        export CFLAGS="-Os"
+
+
+
+        JOBS=$(nproc)
+       rm -rf /tmp/zlib
+
+        mkdir /tmp/zlib
+
+
+
+        tar xf deps/zlib.tar.gz \
+        -C /tmp/zlib \
+        --strip-components=1
+
+
+
+        (
+
+        cd /tmp/zlib
+
+
+        CC=$CC \
+        AR=$AR \
+        RANLIB=$RANLIB \
+        ./configure \
+        --static \
+        --prefix=/usr
+
+
+
+        make -j$JOBS
+
+
+        make install \
+        DESTDIR=$INST/deps
+
+
+        )
+      case "$TC" in
+
+        x86_64-*) OSSL=linux-x86_64;;
+
+        aarch64-*) OSSL=linux-aarch64;;
+
+        i686-*) OSSL=linux-x86;;
+
+        arm-*) OSSL=linux-armv4;;
+
+        esac
+
+
+
+
+        rm -rf /tmp/openssl
+
+        mkdir /tmp/openssl
+
+
+
+        tar xf deps/openssl.tar.gz \
+        -C /tmp/openssl \
+        --strip-components=1
+
+
+
+
+
+        (
+
+        cd /tmp/openssl
+
+
+
+        ./Configure \
+        $OSSL \
+        no-shared \
+        no-tests \
+        no-threads \
+        CC=$CC \
+        AR=$AR \
+        RANLIB=$RANLIB \
+        --prefix=/usr
+
+
+
+        make -j$JOBS
+
+
+        make install_sw \
+        DESTDIR=$INST/deps
+
+
+        )
+
+        cd src
+
+
+
+        mkdir build
+
+        cd build
+
+
+
+        cmake .. \
+        -DCMAKE_SYSTEM_NAME=Linux \
+        -DCMAKE_C_COMPILER=$CC \
+        -DCMAKE_FIND_ROOT_PATH=$INST/deps/usr \
+        -DCMAKE_PREFIX_PATH=$INST/deps/usr \
+        -DOPENSSL_ROOT_DIR=$INST/deps/usr \
+        -DZLIB_ROOT=$INST/deps/usr \
+        -DCMAKE_EXE_LINKER_FLAGS="-static" \
+        -DBUILD_STATIC=ON \
+        -DCMAKE_INSTALL_PREFIX=/usr
+
+
+
+        make -j$JOBS
+
+
+        make install DESTDIR=$INST
+    - name: package
+
+
+      run: |
+
+
+        mkdir dist
+
+
+        find install/usr/bin \
+        -type f \
+        -exec cp {} dist/ \;
+
+
+
+        strip install/usr/bin/* || true
+
+
+
+        tar cJf \
+        "${{github.event.inputs.tool_name}}-${{github.event.inputs.tool_version}}-${{matrix.target}}.tar.xz" \
+        -C dist .
+
+
+
+        sha256sum *.tar.xz > SHA256.txt
+
+
+
+
+    - name: upload
+
+
+      uses: actions/upload-artifact@v4
+
+
+      with:
+
+        name:
+          ${{github.event.inputs.tool_name}}-${{matrix.target}}
+
+
+        path:
+
+          |
+          *.tar.xz
+          SHA256.txt
 
   release:
+
+
     needs: build
-    name: 发布至 Release
+
+
     runs-on: ubuntu-latest
+
+
     permissions:
+
       contents: write
+
+
+
     steps:
-      - name: 下载所有的构建产物
-        uses: actions/download-artifact@v4
-        with:
-          path: release
-          pattern: "*"
-          merge-multiple: true
 
-      - name: 收集校验和
-        run: |
-          echo "### 📦 效验" > RELEASE.md
-          echo "" >> RELEASE.md
-          echo "| 文件名 | SHA256 |" >> RELEASE.md
-          echo "| -------- | --------- |" >> RELEASE.md
-          for i in release/*.sha256.txt; do
-            HASH=$(awk '{print $1}' "$i")
-            FILENAME=$(basename "$i" .sha256.txt)
-            echo "| \`${FILENAME}\` | \`${HASH}\` |" >> RELEASE.md
-          done
 
-      - name: 推送到 Release
-        env:
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}
-          TOOL_NAME: ${{ github.event.inputs.tool_name }}
-          TOOL_VERSION: ${{ github.event.inputs.tool_version }}
-        run: |
-          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "创建新的 Release: $TAG_NAME"
-            gh release create "$TAG_NAME" --title "$TOOL_NAME $TOOL_VERSION" -F RELEASE.md
-          fi
+    - uses: actions/download-artifact@v4
 
-          for i in release/*.tar.xz; do
-            echo "正在上传 $i"
-            gh release upload "$TAG_NAME" "$i" --clobber
-          done
+      with:
 
-          gh release edit "$TAG_NAME" -F RELEASE.md
+        path: release
+
+        merge-multiple: true
+
+
+
+
+    - name: create release
+
+
+      env:
+
+        GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+        TAG:
+          ${{github.event.inputs.tool_name}}-${{github.event.inputs.tool_version}}
+
+
+      run: |
+
+
+        gh release create "$TAG" \
+        release/*.tar.xz \
+        --title "$TAG" \
+        --generate-notes \
+        || \
+        gh release upload "$TAG" release/*.tar.xz --clobber
