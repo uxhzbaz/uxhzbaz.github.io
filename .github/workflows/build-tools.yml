@@ -116,7 +116,7 @@ jobs:
         if: steps.tc.outputs.cache-hit != 'true'
         run: |
           curl -fL --retry 5 --retry-all-errors \
-          "${TOOLCHAIN_BASE}/{{ matrix.tc_triple }}.tar.xz" \
+          "${TOOLCHAIN_BASE}/${{ matrix.tc_triple }}.tar.xz" \
           -o tc.tar.xz
 
           mkdir toolchain
