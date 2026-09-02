@@ -6,34 +6,38 @@ on:
   workflow_dispatch:
     inputs:
       run_name:
-        description: run name
         default: ''
         required: false
       tool_name:
-        description: tool name
         default: mscp
         required: true
       tool_version:
-        description: version
         default: 0.2.4
         required: true
       source_url:
-        description: source url
         default: https://github.com/upa/mscp/releases/download/v0.2.4/mscp-0.2.4.tar.gz
         required: true
       targets:
-        description: targets
         default: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi
         required: true
       build_command:
-        description: build command
         default: |
-          mkdir -p build
+          mkdir build
           cd build
-          cmake .. -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_C_COMPILER="${CC}" -DCMAKE_FIND_ROOT_PATH="${INST}/deps/usr" -DCMAKE_PREFIX_PATH="${INST}/deps/usr" -DOPENSSL_ROOT_DIR="${INST}/deps/usr" -DZLIB_ROOT="${INST}/deps/usr" -DCMAKE_EXE_LINKER_FLAGS="-static" -DBUILD_STATIC=ON -DCMAKE_INSTALL_PREFIX=/usr
+          cmake .. \
+          -DCMAKE_SYSTEM_NAME=Linux \
+          -DCMAKE_C_COMPILER="${CC}" \
+          -DCMAKE_FIND_ROOT_PATH="${INST}/deps/usr" \
+          -DCMAKE_PREFIX_PATH="${INST}/deps/usr" \
+          -DOPENSSL_ROOT_DIR="${INST}/deps/usr" \
+          -DZLIB_ROOT="${INST}/deps/usr" \
+          -DCMAKE_EXE_LINKER_FLAGS="-static" \
+          -DBUILD_STATIC=ON \
+          -DCMAKE_INSTALL_PREFIX=/usr
           make -j$(nproc)
           make install DESTDIR="${INST}"
         required: true
+
 
 env:
   TOOLCHAIN_TAG: 2026-06-30-14-51
@@ -43,108 +47,161 @@ env:
 jobs:
 
   prepare:
-    runs-on: ubuntu-latest
+
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: cache source
-        uses: actions/cache@v4
-        with:
-          path: deps
-          key: deps-zlib-1.3.1-openssl-3.3.2
 
-      - name: download source
+      - name: download
         run: |
-          mkdir -p deps
 
-          test -f deps/zlib.tar.gz || curl -fL --retry 5 --retry-all-errors \
+          mkdir deps
+
+          curl -fL --retry 10 --retry-delay 5 \
           https://zlib.net/fossils/zlib-1.3.1.tar.gz \
           -o deps/zlib.tar.gz
 
-          test -f deps/openssl.tar.gz || curl -fL --retry 5 --retry-all-errors \
+          curl -fL --retry 10 --retry-delay 5 \
           https://github.com/openssl/openssl/releases/download/openssl-3.3.2/openssl-3.3.2.tar.gz \
           -o deps/openssl.tar.gz
 
-      - name: upload source
-        uses: actions/upload-artifact@v4
+
+          file deps/*
+
+          file deps/zlib.tar.gz | grep gzip
+
+          file deps/openssl.tar.gz | grep gzip
+
+
+      - uses: actions/upload-artifact@v4.6.2
         with:
           name: deps
           path: deps
+          retention-days: 1
+
 
 
   matrix:
-    runs-on: ubuntu-latest
+
+    runs-on: ubuntu-24.04
+
     outputs:
-      matrix: ${{ steps.p.outputs.matrix }}
+      matrix: ${{ steps.x.outputs.matrix }}
 
     steps:
-      - id: p
-        env:
-          TARGETS: ${{ github.event.inputs.targets }}
+
+      - id: x
+
         run: |
-          echo "matrix={\"include\":$(jq -c -n --arg x "$TARGETS" '$x|split(",")|map({t:.,tc_triple:.})')}" >> $GITHUB_OUTPUT
+
+          echo '${{ github.event.inputs.targets }}' |
+          tr ',' '\n' |
+          jq -R -s -c '
+          split("\n")
+          |map(select(length>0))
+          |map({t:.,tc_triple:.})
+          |{include:.}
+          ' > matrix.json
+
+          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+
 
 
   build:
-    needs:
-      - matrix
-      - prepare
 
-    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - matrix
+
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+      matrix: ${{fromJSON(needs.matrix.outputs.matrix)}}
+
 
     steps:
 
-      - name: deps
-        uses: actions/download-artifact@v4
+
+      - uses: actions/download-artifact@v4.3.0
         with:
           name: deps
           path: deps
 
 
+
       - name: toolchain cache
+
+        uses: actions/cache@v4.2.3
+
         id: tc
-        uses: actions/cache@v4
+
         with:
+
           path: toolchain
-          key: musl-${{ matrix.tc_triple }}-${{ env.TOOLCHAIN_TAG }}
+
+          key: toolchain-${{matrix.tc_triple}}-${{env.TOOLCHAIN_TAG}}
 
 
-      - name: toolchain
+
+      - name: toolchain download
+
         if: steps.tc.outputs.cache-hit != 'true'
+
         run: |
-          curl -fL --retry 5 --retry-all-errors \
-          "${TOOLCHAIN_BASE}/${{ matrix.tc_triple }}.tar.xz" \
-          -o tc.tar.xz
 
           mkdir toolchain
 
-          tar xf tc.tar.xz \
+          url="${TOOLCHAIN_BASE}/${{matrix.tc_triple}}.tar.xz"
+
+
+          curl -fL \
+          --retry 10 \
+          --retry-all-errors \
+          "$url" \
+          -o tc.tar.xz
+
+
+          file tc.tar.xz
+
+          file tc.tar.xz | grep -q 'XZ compressed' || exit 1
+
+
+          tar -xf tc.tar.xz \
           -C toolchain \
           --strip-components=1
 
 
+
       - name: source
+
         run: |
-          curl -fL --retry 5 --retry-all-errors \
-          "${{ github.event.inputs.source_url }}" \
+
+          curl -fL \
+          --retry 10 \
+          --retry-all-errors \
+          "${{github.event.inputs.source_url}}" \
           -o src.tar
+
 
           mkdir src
 
-          tar xf src.tar \
+          tar -xf src.tar \
           -C src \
           --strip-components=1
 
 
+
       - name: build
+
         run: |
 
-          export TC="${{ matrix.tc_triple }}"
+          export TC="${{matrix.tc_triple}}"
+
           export INST="$GITHUB_WORKSPACE/install"
+
           export PATH="$GITHUB_WORKSPACE/toolchain/bin:$PATH"
+
 
           export CC="${TC}-gcc"
           export CXX="${TC}-g++"
@@ -152,24 +209,47 @@ jobs:
           export RANLIB="${TC}-ranlib"
           export STRIP="${TC}-strip"
 
-          export CFLAGS="-Os"
 
           mkdir -p "$INST"
 
+
+          rm -rf /tmp/zlib
+
           mkdir /tmp/zlib
-          tar xf deps/zlib.tar.gz \
+
+          tar -xf deps/zlib.tar.gz \
           -C /tmp/zlib \
           --strip-components=1
 
+
           (
           cd /tmp/zlib
-          CC="$CC" AR="$AR" RANLIB="$RANLIB" \
-          ./configure --static --prefix=/usr
+
+          CC=$CC \
+          AR=$AR \
+          RANLIB=$RANLIB \
+          ./configure \
+          --static \
+          --prefix=/usr
+
 
           make -j$(nproc)
 
-          make install DESTDIR="$INST/deps"
+          make install DESTDIR=$INST/deps
+
           )
+
+
+
+          rm -rf /tmp/openssl
+
+          mkdir /tmp/openssl
+
+
+          tar -xf deps/openssl.tar.gz \
+          -C /tmp/openssl \
+          --strip-components=1
+
 
 
           case "$TC" in
@@ -180,39 +260,41 @@ jobs:
           esac
 
 
-          mkdir /tmp/openssl
-
-          tar xf deps/openssl.tar.gz \
-          -C /tmp/openssl \
-          --strip-components=1
-
 
           (
           cd /tmp/openssl
 
-          ./Configure "$OSSL" \
+
+          ./Configure \
+          $OSSL \
           no-shared \
           no-tests \
           no-threads \
-          CC="$CC" \
-          AR="$AR" \
-          RANLIB="$RANLIB" \
+          CC=$CC \
+          AR=$AR \
+          RANLIB=$RANLIB \
           --prefix=/usr
+
 
           make -j$(nproc)
 
-          make install_sw DESTDIR="$INST/deps"
+          make install_sw DESTDIR=$INST/deps
+
           )
 
 
           cd src
 
-          ${{ github.event.inputs.build_command }}
+          ${{github.event.inputs.build_command}}
 
 
-      - name: collect
+
+      - name: package
+
         run: |
+
           mkdir dist
+
 
           find install/usr/bin \
           -type f \
@@ -221,70 +303,77 @@ jobs:
           cut -d: -f1 |
           while read f
           do
-            ${{ matrix.tc_triple }}-strip "$f" || true
+            ${{matrix.tc_triple}}-strip "$f" || true
             cp "$f" dist/
           done
 
 
-      - name: check
-        run: |
-          for f in dist/*
-          do
-            file "$f" | grep "statically linked"
-          done
+          name="${{github.event.inputs.tool_name}}-${{github.event.inputs.tool_version}}-${{matrix.t}}"
 
 
-      - name: package
-        run: |
-          name="${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}-${{ matrix.t }}"
+          tar -cJf "$name.tar.xz" -C dist .
 
-          tar cJf "$name.tar.xz" -C dist .
 
           sha256sum "$name.tar.xz" \
-          > "$name.tar.xz.sha256.txt"
+          > "$name.tar.xz.sha256"
 
 
-      - name: artifact
-        uses: actions/upload-artifact@v4
+
+      - uses: actions/upload-artifact@v4.6.2
+
         with:
-          name: ${{ matrix.t }}
+
+          name: ${{matrix.t}}
+
           path: |
             *.tar.xz
-            *.sha256.txt
+            *.sha256
 
 
 
   release:
 
+
     needs: build
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
 
     permissions:
+
       contents: write
+
 
     steps:
 
-      - uses: actions/download-artifact@v4
+
+      - uses: actions/download-artifact@v4.3.0
+
         with:
+
           path: release
+
           merge-multiple: true
 
 
+
       - name: release
+
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+
+          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
         run: |
 
-          tag="${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}"
+          tag="${{github.event.inputs.tool_name}}-${{github.event.inputs.tool_version}}"
 
-          test "$(gh release view "$tag" >/dev/null 2>&1)" || \
+
           gh release create "$tag" \
-          --title "$tag"
+          --title "$tag" \
+          --notes "build"
 
 
           gh release upload "$tag" \
           release/*.tar.xz \
-          release/*.sha256.txt \
+          release/*.sha256 \
           --clobber
