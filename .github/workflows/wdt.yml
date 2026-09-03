@@ -1,0 +1,268 @@
+name: build wdt (v1.27.1612021)
+run-name: wdt-1.27.1612021
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: '目标三元组，逗号分隔'
+        default: 'x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,i686-unknown-linux-musl,arm-unknown-linux-musleabi'
+        required: true
+
+env:
+  TOOLCHAIN_TAG: '2026-06-30-14-51'
+  TOOLCHAIN_BASE: 'https://github.com/uxhzbaz/musl-cross/releases/download/2026-06-30-14-51'
+  WDT_VERSION: '1.27.1612021'
+  WDT_URL: 'https://github.com/facebook/wdt/archive/refs/tags/v1.27.1612021.tar.gz'
+  FOLLY_TAG: 'v2016.12.19.00'
+  DOUBLECONV_TAG: 'v3.3.0'
+  GFLAGS_TAG: 'v2.2.2'
+  GLOG_TAG: 'v0.6.0'
+  OPENSSL_VER: '1.0.2u'
+  BOOST_VER: '1_75_0'
+  BOOST_VER_DOT: '1.75.0'
+
+jobs:
+  s:
+    name: 解析参数
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.p.outputs.matrix }}
+    steps:
+      - id: p
+        shell: bash
+        env:
+          TARGETS: ${{ github.event.inputs.targets }}
+        run: |
+          include='[]'
+          IFS=',' read -ra TS <<< "$TARGETS"
+          for t in "${TS[@]}"; do
+            t="${t# }"; t="${t% }"
+            [[ -z "$t" ]] && continue
+            tc_url="${TOOLCHAIN_BASE}/${t}.tar.xz"
+            include=$(jq --arg t "$t" --arg tc_url "$tc_url" '. += [{"t":$t,"tc_url":$tc_url}]' <<< "$include")
+          done
+          echo "matrix=$(jq -c '{"include":.}' <<< "$include")" >> $GITHUB_OUTPUT
+
+  build:
+    needs: s
+    name: ${{ matrix.t }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.s.outputs.matrix) }}
+    steps:
+      - name: 安装构建依赖
+        run: sudo apt-get update && sudo apt-get install -y perl make cmake curl
+
+      - name: 缓存工具链
+        id: cache-tc
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/toolchain
+          key: musl-toolchain-${{ matrix.t }}-${{ env.TOOLCHAIN_TAG }}
+
+      - name: 下载工具链
+        if: steps.cache-tc.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 "${{ matrix.tc_url }}" -o toolchain.tar.xz
+          mkdir -p toolchain
+          tar -xf toolchain.tar.xz -C toolchain --strip-components=1
+          rm -f toolchain.tar.xz
+
+      - name: 下载 wdt 源码
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 "$WDT_URL" -o wdt.tar.gz
+          mkdir -p src
+          tar -xf wdt.tar.gz -C src --strip-components=1
+
+      - name: 编译依赖并编译 wdt
+        run: |
+          set -e
+          TC="${{ matrix.t }}"
+          ROOT="${{ github.workspace }}/src"
+          DEPS="${{ github.workspace }}/deps"
+          FOLLYDIR="${{ github.workspace }}/folly"
+          INST="${{ github.workspace }}/install"
+          export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
+          export CC="${TC}-gcc"
+          export CXX="${TC}-g++"
+          export AR="${TC}-ar"
+          export RANLIB="${TC}-ranlib"
+          export STRIP="${TC}-strip"
+          export CFLAGS="-O3"
+          export CXXFLAGS="-O3 -std=gnu++14 -DNDEBUG"
+
+          mkdir -p "$DEPS" "$FOLLYDIR" "$INST"
+          # wdt 内部头文件用 <wdt/xxx.h> 引用自己，需要一个叫 wdt 的目录指回源码本身
+          ln -sfn "$ROOT" "$(dirname "$ROOT")/wdt"
+
+          # 去掉 CMakeLists.txt 里写死的 x86 专属指令集（否则 arm/aarch64 编译不过）
+          sed -i -E 's/-msse4\.2( -mpclmul)?//g' "$ROOT/CMakeLists.txt"
+
+          case "$TC" in
+            x86_64*)  OSSL_TARGET=linux-x86_64 ;;
+            aarch64*) OSSL_TARGET=linux-generic64 ;;
+            i686*|i386*) OSSL_TARGET=linux-generic32 ;;
+            arm*) OSSL_TARGET=linux-generic32 ;;
+            *) OSSL_TARGET=linux-generic32 ;;
+          esac
+
+          echo "==> folly (${FOLLY_TAG})"
+          curl -fsSL "https://github.com/facebook/folly/archive/refs/tags/${FOLLY_TAG}.tar.gz" -o /tmp/folly.tar.gz
+          tar -xf /tmp/folly.tar.gz -C "$FOLLYDIR" --strip-components=1
+
+          echo "==> double-conversion (${DOUBLECONV_TAG})"
+          curl -fsSL "https://github.com/google/double-conversion/archive/refs/tags/${DOUBLECONV_TAG}.tar.gz" -o /tmp/dc.tar.gz
+          mkdir -p /tmp/dc && tar -xf /tmp/dc.tar.gz -C /tmp/dc --strip-components=1
+          cmake -S /tmp/dc -B /tmp/dc/b -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF
+          cmake --build /tmp/dc/b -j"$(nproc)"
+          cmake --install /tmp/dc/b
+
+          echo "==> gflags (${GFLAGS_TAG})"
+          curl -fsSL "https://github.com/gflags/gflags/archive/refs/tags/${GFLAGS_TAG}.tar.gz" -o /tmp/gf.tar.gz
+          mkdir -p /tmp/gf && tar -xf /tmp/gf.tar.gz -C /tmp/gf --strip-components=1
+          cmake -S /tmp/gf -B /tmp/gf/b -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DBUILD_TESTING=OFF
+          cmake --build /tmp/gf/b -j"$(nproc)"
+          cmake --install /tmp/gf/b
+
+          echo "==> glog (${GLOG_TAG})"
+          curl -fsSL "https://github.com/google/glog/archive/refs/tags/${GLOG_TAG}.tar.gz" -o /tmp/gl.tar.gz
+          mkdir -p /tmp/gl && tar -xf /tmp/gl.tar.gz -C /tmp/gl --strip-components=1
+          cmake -S /tmp/gl -B /tmp/gl/b -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_PREFIX_PATH="$DEPS" -DBUILD_SHARED_LIBS=OFF -DWITH_GFLAGS=ON -DWITH_GTEST=OFF -DWITH_UNWIND=OFF -DBUILD_TESTING=OFF
+          cmake --build /tmp/gl/b -j"$(nproc)"
+          cmake --install /tmp/gl/b
+
+          echo "==> openssl (${OPENSSL_VER}, target=${OSSL_TARGET})"
+          curl -fsSL "https://www.openssl.org/source/old/1.0.2/openssl-${OPENSSL_VER}.tar.gz" -o /tmp/ssl.tar.gz
+          mkdir -p /tmp/ssl && tar -xf /tmp/ssl.tar.gz -C /tmp/ssl --strip-components=1
+          (
+            cd /tmp/ssl
+            ./Configure "$OSSL_TARGET" no-shared no-asm --prefix="$DEPS" --openssldir="$DEPS/ssl"
+            make -j"$(nproc)" depend
+            make -j"$(nproc)"
+            make install_sw
+          )
+
+          echo "==> boost (${BOOST_VER_DOT})"
+          curl -fsSL "https://archives.boost.io/release/${BOOST_VER_DOT}/source/boost_${BOOST_VER}.tar.gz" -o /tmp/boost.tar.gz
+          mkdir -p /tmp/boost && tar -xf /tmp/boost.tar.gz -C /tmp/boost --strip-components=1
+          (
+            cd /tmp/boost
+            env -u CC -u CXX -u AR -u RANLIB -u STRIP ./bootstrap.sh --with-libraries=system,filesystem
+            echo "using gcc : cross : $CXX ;" > user-config.jam
+            env -u CC -u CXX -u AR -u RANLIB -u STRIP ./b2 --user-config=user-config.jam \
+              toolset=gcc-cross target-os=linux link=static runtime-link=static variant=release \
+              cxxflags="-std=gnu++14" -j"$(nproc)" --prefix="$DEPS" install
+          )
+
+          echo "==> wdt"
+          mkdir -p "$ROOT/build"
+          cd "$ROOT/build"
+          cmake .. \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=14 \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DFOLLY_SOURCE_DIR="$FOLLYDIR" \
+            -DBOOST_ROOT="$DEPS" \
+            -DBoost_NO_SYSTEM_PATHS=ON \
+            -DBoost_USE_STATIC_LIBS=ON \
+            -DBoost_USE_STATIC_RUNTIME=ON \
+            -DDOUBLECONV_INCLUDE_DIR="$DEPS/include" \
+            -DDOUBLECONV_LIBRARY="$DEPS/lib/libdouble-conversion.a" \
+            -DGLOG_INCLUDE_DIR="$DEPS/include" \
+            -DGLOG_LIBRARY="$DEPS/lib/libglog.a" \
+            -DGFLAGS_INCLUDE_DIR="$DEPS/include" \
+            -DGFLAGS_LIBRARY="$DEPS/lib/libgflags.a" \
+            -DOPENSSL_ROOT_DIR="$DEPS" \
+            -DOPENSSL_INCLUDE_DIR="$DEPS/include" \
+            -DOPENSSL_CRYPTO_LIBRARY="$DEPS/lib/libcrypto.a" \
+            -DOPENSSL_SSL_LIBRARY="$DEPS/lib/libssl.a" \
+            -DCMAKE_EXE_LINKER_FLAGS="-static"
+          make -j"$(nproc)"
+          make install DESTDIR="$INST"
+
+      - name: 收集产物
+        run: |
+          TARGET="${{ matrix.t }}"
+          INST="${{ github.workspace }}/install"
+          STRIP_BIN="${{ github.workspace }}/toolchain/bin/${TARGET}-strip"
+          mkdir -p dist
+          f="${INST}/usr/bin/wdt"
+          if [[ -f "$f" ]]; then
+            "$STRIP_BIN" "$f" 2>/dev/null || true
+            cp "$f" "dist/wdt"
+          fi
+          [[ -f "${INST}/usr/bin/wcp" ]] && cp "${INST}/usr/bin/wcp" "dist/wcp"
+          echo "产物列表:"; find dist -type f | sort
+
+      - name: 验证静态链接
+        run: |
+          fail=0
+          while IFS= read -r -d '' f; do
+            file "$f" | grep -qE 'ELF.*executable' || continue
+            if ! file "$f" | grep -q "statically linked"; then
+              echo "::error::$f 未静态链接: $(file "$f")"
+              fail=1
+            else
+              echo "OK: $(basename "$f") - statically linked"
+            fi
+          done < <(find dist -maxdepth 1 -type f -print0)
+          [[ $fail -eq 0 ]] || exit 1
+
+      - name: 打包产物
+        run: |
+          TARGET="${{ matrix.t }}"
+          PKG_NAME="wdt-${WDT_VERSION}-${TARGET}"
+          tar -cJf "${PKG_NAME}.tar.xz" -C dist .
+          sha256sum "${PKG_NAME}.tar.xz" | awk '{print $1}' > "${PKG_NAME}.tar.xz.sha256.txt"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v5
+        with:
+          name: wdt-${{ env.WDT_VERSION }}-${{ matrix.t }}
+          path: |
+            *.tar.xz
+            *.sha256.txt
+
+  release:
+    needs: build
+    name: 发布至 Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: release
+          pattern: "*"
+          merge-multiple: true
+
+      - name: 收集校验和
+        run: |
+          echo "### 📦 效验" > RELEASE.md
+          echo "" >> RELEASE.md
+          echo "| 文件名 | SHA256 |" >> RELEASE.md
+          echo "| -------- | --------- |" >> RELEASE.md
+          for i in release/*.sha256.txt; do
+            HASH=$(awk '{print $1}' "$i")
+            FILENAME=$(basename "$i" .sha256.txt)
+            echo "| \`${FILENAME}\` | \`${HASH}\` |" >> RELEASE.md
+          done
+
+      - name: 推送到 Release
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: wdt-${{ env.WDT_VERSION }}
+        run: |
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" --title "wdt $WDT_VERSION" -F RELEASE.md
+          fi
+          for i in release/*.tar.xz; do
+            gh release upload "$TAG_NAME" "$i" --clobber
+          done
+          gh release edit "$TAG_NAME" -F RELEASE.md
