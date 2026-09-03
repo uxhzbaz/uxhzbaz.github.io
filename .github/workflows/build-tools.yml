@@ -82,7 +82,7 @@ jobs:
           fi
           tar -czf src.tar.gz -C src .
       - name: 上传源码
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: shared-src
           path: src.tar.gz
@@ -119,7 +119,7 @@ jobs:
           rm -f toolchain.tar.xz
 
       - name: 下载共享源码
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: shared-src
 
@@ -194,7 +194,7 @@ jobs:
           echo "打包完毕: ${PKG_NAME}.tar.xz ($(ls -lh "${PKG_NAME}.tar.xz" | awk '{print $5}'))"
 
       - name: 上传产物至 Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ github.event.inputs.tool_name }}-${{ github.event.inputs.tool_version }}-${{ matrix.t }}
           path: |
@@ -209,7 +209,7 @@ jobs:
       contents: write
     steps:
       - name: 下载所有的构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: release
           pattern: "*"
