@@ -1,6 +1,6 @@
 {
-  "version": "v1.7.2",
-  "versionCode": 802,
-  "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/v1.7.2/OpenEUICC-Magisk_module-v1.7.2-priv.802.zip",
-  "changelog": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/tag/v1.7.2"
+  "version": "v1.7.2-1-g28aad57",
+  "versionCode": 803,
+  "zipUrl": "https://github.com/uxhzbaz/uxhzbaz.github.io/releases/download/v1.7.2-1-g28aad57/OpenEUICC-Magisk_module-v1.7.2-1-g28aad57-priv.803.zip",
+  "changelog": "https://raw.githubusercontent.com/uxhzbaz/uxhzbaz.github.io/main/openeuicc-changelog.txt"
 }
