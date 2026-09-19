@@ -1,1 +1,2 @@
-- chore: update submodules (#356)
+- chore: Also upgrade setup-android@v4
+- chore: Upgrade to setup-java@v4
