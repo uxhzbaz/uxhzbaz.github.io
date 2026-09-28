@@ -1,1 +1,1 @@
-- feat: Make default ES10x MSS overlayable (#357)
+- OpenEuiccService: Don't ignore the only removable eUICC (#358)
