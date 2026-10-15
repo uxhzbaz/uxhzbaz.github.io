@@ -1,0 +1,173 @@
+name: Build & Release BatteryRecorder
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: "源码 tar.gz 下载链接"
+        required: true
+        default: "https://github.com/Itosang/BatteryRecorder/archive/refs/tags/v2.2.0-release.tar.gz"
+      version:
+        description: "版本号（用于标签/标题/versionName）"
+        required: true
+        default: "2.2.0"
+      app_name:
+        description: "应用名（用于标签/标题/文件名）"
+        required: true
+        default: "BatteryRecorder"
+      version_code:
+        description: "versionCode（留空则按 主*10000+次*100+修订 计算）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.app_name }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SOURCE_URL: ${{ inputs.source_url }}
+      VERSION: ${{ inputs.version }}
+      APP_NAME: ${{ inputs.app_name }}
+      VERSION_CODE_IN: ${{ inputs.version_code }}
+      NDK_VER: "29.0.14206865"
+      CMAKE_VER: "3.22.1"
+
+    steps:
+      # 不 checkout 本仓库，只需要 gh 往本仓库发 release
+      - name: Download source
+        run: |
+          set -euo pipefail
+          mkdir src dist
+          curl -fL --retry 3 "$SOURCE_URL" -o src.tar.gz
+          tar -xzf src.tar.gz -C src --strip-components=1
+          test -f src/settings.gradle.kts
+
+      - name: Compute version info
+        id: info
+        run: |
+          set -euo pipefail
+          IFS='.' read -r MA MI PA _ <<< "$VERSION"
+          CODE="${VERSION_CODE_IN:-$(( ${MA:-0} * 10000 + ${MI:-0} * 100 + ${PA:-0} ))}"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=${APP_NAME}-${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            src/**/*.gradle.kts
+            src/gradle/libs.versions.toml
+            src/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Install NDK / CMake if missing
+        run: |
+          set -euo pipefail
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          PKGS=()
+          [ -d "$ANDROID_HOME/ndk/$NDK_VER" ] || PKGS+=("ndk;$NDK_VER")
+          [ -d "$ANDROID_HOME/cmake/$CMAKE_VER" ] || PKGS+=("cmake;$CMAKE_VER")
+          if [ ${#PKGS[@]} -gt 0 ]; then
+            yes | "$SDKM" --licenses >/dev/null || true
+            "$SDKM" "${PKGS[@]}"
+          fi
+
+      - name: Prepare signing
+        env:
+          JKS_B64: ${{ secrets.KEYSTORE_JKS_B64 }}
+          PROPS_B64: ${{ secrets.KEYSTORE_PROPS_B64 }}
+          STORE_PW: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd src
+          printf '%s' "$JKS_B64" | base64 -d > "$PWD/key.jks"
+          printf '%s' "$PROPS_B64" | base64 -d | tr -d '\r' > signing.properties
+          echo >> signing.properties
+          sed -i '/^KEYSTORE_FILE=/d' signing.properties
+          echo "KEYSTORE_FILE=$PWD/key.jks" >> signing.properties
+          grep -q '^KEYSTORE_PASSWORD=' signing.properties || printf 'KEYSTORE_PASSWORD=%s\n' "$STORE_PW" >> signing.properties
+          grep -q '^KEYSTORE_ALIAS_PASSWORD=' signing.properties || printf 'KEYSTORE_ALIAS_PASSWORD=%s\n' "$STORE_PW" >> signing.properties
+          grep -q '^KEYSTORE_ALIAS=' signing.properties || { echo "::error::signing.properties 缺少 KEYSTORE_ALIAS"; exit 1; }
+
+      - name: Patch build scripts for tarball build
+        working-directory: src
+        run: |
+          set -euo pipefail
+          # 源码包没有 .git，原脚本靠 git rev-list 取提交数会失败 -> 改为由参数传入
+          sed -i 's|^val gitCommitCountString = .*|val gitCommitCountString = (findProperty("gitCommitCount") as String?) ?: "1"|' build.gradle.kts
+          # 版本名改为输入的版本号
+          sed -i "s|^val baseVersionName = .*|val baseVersionName = \"${VERSION}\"|" app/build.gradle.kts
+          grep -n 'gitCommitCountString =' build.gradle.kts
+          grep -n 'baseVersionName =' app/build.gradle.kts
+          grep -n 'abiFilters' server/build.gradle.kts
+
+      - name: Build four ABIs (release only)
+        working-directory: src
+        env:
+          VERSION_CODE: ${{ steps.info.outputs.code }}
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          cat >> gradle.properties <<'PROPS'
+
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          org.gradle.parallel=true
+          kotlin.compiler.execution.strategy=in-process
+          PROPS
+          for ABI in arm64-v8a armeabi-v7a x86_64 x86; do
+            echo "::group::build $ABI"
+            git_cfg=server/build.gradle.kts
+            # 每次只编译一个 ABI 的 native 库，APK 只含该架构
+            sed -i -E "s|abiFilters\.(addAll\(listOf\([^)]*\)\)\|clear\(\)\|add\([^)]*\))|abiFilters.add(\"$ABI\")|" "$git_cfg" || true
+            grep -n 'abiFilters' "$git_cfg"
+            rm -rf app/build/outputs/apk/release
+            ./gradlew :app:assembleRelease \
+              -PgitCommitCount="$VERSION_CODE" \
+              -PversionNameSuffix= \
+              --console=plain
+            APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
+            cp "$APK" "../dist/${APP_NAME}-${VERSION}-${ABI}.apk"
+            # 下一轮把 abiFilters 行还原成可匹配的形式
+            sed -i -E "s|abiFilters\.add\(\"$ABI\"\)|abiFilters.addAll(listOf(\"x86\", \"x86_64\", \"armeabi-v7a\", \"arm64-v8a\"))|" "$git_cfg"
+            echo "::endgroup::"
+          done
+          ls -l ../dist
+
+      - name: Verify signatures and ABIs
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n1)
+          cd dist
+          for f in *.apk; do
+            echo "== $f"
+            "$APKSIGNER" verify --print-certs "$f" | grep -E "Signer #1 certificate SHA-256" || true
+            unzip -Z1 "$f" | grep -E '^lib/[^/]+/' | cut -d/ -f2 | sort -u | tr '\n' ' '; echo
+          done
+          sha256sum *.apk | tee SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.info.outputs.tag }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          NOTES=$(printf '源码: %s\n\n```\n%s\n```\n' "$SOURCE_URL" "$(cat dist/SHA256SUMS.txt)")
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$REPO" \
+              --target "${{ github.sha }}" \
+              --title "$TAG" \
+              --notes "$NOTES"
+          fi
