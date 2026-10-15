@@ -90,13 +90,37 @@ jobs:
           set -euo pipefail
           cd src
           printf '%s' "$JKS_B64" | base64 -d > "$PWD/key.jks"
-          printf '%s' "$PROPS_B64" | base64 -d | tr -d '\r' > signing.properties
-          echo >> signing.properties
-          sed -i '/^KEYSTORE_FILE=/d' signing.properties
-          echo "KEYSTORE_FILE=$PWD/key.jks" >> signing.properties
-          grep -q '^KEYSTORE_PASSWORD=' signing.properties || printf 'KEYSTORE_PASSWORD=%s\n' "$STORE_PW" >> signing.properties
-          grep -q '^KEYSTORE_ALIAS_PASSWORD=' signing.properties || printf 'KEYSTORE_ALIAS_PASSWORD=%s\n' "$STORE_PW" >> signing.properties
-          grep -q '^KEYSTORE_ALIAS=' signing.properties || { echo "::error::signing.properties 缺少 KEYSTORE_ALIAS"; exit 1; }
+          printf '%s' "$PROPS_B64" | base64 -d | tr -d '\r' > raw.properties || true
+
+          echo "props 里的键名（不含值）:"
+          grep -vE '^\s*(#|$)' raw.properties | sed -E 's/\s*[=:].*//' || true
+
+          get() { grep -iE "^\s*($1)\s*[=:]" raw.properties | head -n1 | sed -E 's/^[^=:]*[=:]\s*//' || true; }
+
+          ALIAS=$(get 'KEYSTORE_ALIAS|keyAlias|key\.alias|alias')
+          SPW=$(get 'KEYSTORE_PASSWORD|storePassword|store\.password')
+          KPW=$(get 'KEYSTORE_ALIAS_PASSWORD|keyPassword|key\.password')
+          SPW="${SPW:-$STORE_PW}"
+          KPW="${KPW:-$SPW}"
+
+          if [ -z "$ALIAS" ]; then
+            echo "props 中没有别名，尝试从 jks 读取"
+            ALIAS=$(keytool -list -keystore key.jks -storepass "$SPW" 2>/dev/null \
+              | grep 'PrivateKeyEntry' | head -n1 | cut -d, -f1 || true)
+          fi
+          if [ -z "$ALIAS" ]; then
+            echo "::error::无法确定别名：请检查 KEYSTORE_JKS_B64 是否为 jks 的 base64、store 密码是否正确"
+            exit 1
+          fi
+          echo "使用别名: $ALIAS"
+
+          {
+            printf 'KEYSTORE_FILE=%s\n' "$PWD/key.jks"
+            printf 'KEYSTORE_PASSWORD=%s\n' "$SPW"
+            printf 'KEYSTORE_ALIAS=%s\n' "$ALIAS"
+            printf 'KEYSTORE_ALIAS_PASSWORD=%s\n' "$KPW"
+          } > signing.properties
+          rm -f raw.properties
 
       - name: Patch build scripts for tarball build
         working-directory: src
