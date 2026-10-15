@@ -133,6 +133,20 @@ jobs:
           grep -n 'gitCommitCountString =' build.gradle.kts
           grep -n 'baseVersionName =' app/build.gradle.kts
           grep -n 'abiFilters' server/build.gradle.kts
+          # 限制 app 最终打包的架构（连同第三方依赖自带的 .so 一起过滤）
+          cat >> app/build.gradle.kts <<'KTS'
+
+          android {
+              defaultConfig {
+                  (findProperty("targetAbi") as String?)?.let { abi ->
+                      ndk {
+                          abiFilters.clear()
+                          abiFilters.add(abi)
+                      }
+                  }
+              }
+          }
+          KTS
 
       - name: Build four ABIs (release only)
         working-directory: src
@@ -157,6 +171,7 @@ jobs:
             ./gradlew :app:assembleRelease \
               -PgitCommitCount="$VERSION_CODE" \
               -PversionNameSuffix= \
+              -PtargetAbi="$ABI" \
               --console=plain
             APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
             cp "$APK" "../dist/${APP_NAME}-${VERSION}-${ABI}.apk"
