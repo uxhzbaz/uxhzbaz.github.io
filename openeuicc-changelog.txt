@@ -1,1 +1,7 @@
-- fix AOSP build
+- CONTRIBUTING: Stress expectation for committers
+- CONTRIBUTING: Clarify when LLM use for capturing hardware / carrier behavior is allowable
+- Update CONTRIBUTING.md again
+- More explanation on LLM policy
+- Fix typo
+- Add contributing guidelines and LLM policy
+- docs: add application notes (#368)
