@@ -1,1 +1,3 @@
-- docs: ara-m authorization scope (#370)
+- refactor: website uri signed message from signing config (#373)
+- refactor: upgrade ndk to new lts version (#372)
+- refactor: migrate to agp 9.9.1 (#371)
